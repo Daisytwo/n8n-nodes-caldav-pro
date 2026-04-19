@@ -1,0 +1,76 @@
+{
+  "name": "n8n-nodes-caldav-calendar",
+  "version": "1.0.0",
+  "description": "n8n community nodes for CalDAV calendar servers (Infomaniak, Nextcloud, iCloud, Google Calendar via CalDAV, Radicale, Baikal, SOGo). Includes a standard node and an AI Agent tool node.",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "caldav",
+    "calendar",
+    "ical",
+    "icalendar",
+    "infomaniak",
+    "nextcloud",
+    "radicale",
+    "baikal",
+    "sogo",
+    "ai-agent",
+    "ai-tool"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/n8n-community/n8n-nodes-caldav-calendar",
+  "author": {
+    "name": "n8n Community",
+    "email": "community@example.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/n8n-community/n8n-nodes-caldav-calendar.git"
+  },
+  "engines": {
+    "node": ">=20.15"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && gulp build:icons",
+    "dev": "tsc --watch",
+    "format": "prettier nodes credentials --write",
+    "lint": "eslint nodes credentials package.json",
+    "lintfix": "eslint nodes credentials package.json --fix",
+    "prepublishOnly": "npm run build && npm run lint",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "pack": "npm run build && npm pack"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/CalDavApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/CalDav/CalDav.node.js",
+      "dist/nodes/CalDav/CalDavTool.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.10",
+    "@typescript-eslint/eslint-plugin": "^7.15.0",
+    "@typescript-eslint/parser": "^7.15.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-n8n-nodes-base": "^1.16.3",
+    "gulp": "^5.0.0",
+    "jest": "^29.7.0",
+    "n8n-workflow": "^1.82.0",
+    "prettier": "^3.3.2",
+    "ts-jest": "^29.1.5",
+    "typescript": "^5.5.3"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

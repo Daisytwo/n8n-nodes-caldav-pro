@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(node -e \"const w = require\\('n8n-workflow'\\); console.log\\('NodeConnectionType:', typeof w.NodeConnectionType, w.NodeConnectionType\\); console.log\\('NCTypes:', w.NodeConnectionTypes\\);\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npx jest:*)",
+      "Bash(npm run:*)",
+      "Bash(npm pack:*)",
+      "Bash(ls -la *.tgz)"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect x="4" y="10" width="56" height="50" rx="6" ry="6" fill="#1f6feb" stroke="#0b3e8e" stroke-width="2"/>
+  <rect x="4" y="10" width="56" height="12" rx="6" ry="6" fill="#0b3e8e"/>
+  <rect x="14" y="4" width="6" height="14" rx="2" ry="2" fill="#0b3e8e"/>
+  <rect x="44" y="4" width="6" height="14" rx="2" ry="2" fill="#0b3e8e"/>
+  <g fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700" text-anchor="middle">
+    <text x="32" y="48">CAL</text>
+  </g>
+</svg>

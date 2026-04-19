@@ -1,0 +1,16 @@
+.github
+.vscode
+node_modules
+src
+test
+tsconfig.json
+tsconfig.tsbuildinfo
+gulpfile.js
+.eslintrc.js
+.eslintrc.prepublish.js
+.prettierrc.js
+.editorconfig
+*.tgz
+coverage
+jest.config.js
+CHANGELOG.md.tmp
