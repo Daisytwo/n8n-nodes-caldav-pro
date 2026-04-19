@@ -8,7 +8,7 @@ import {
 export class CalDavApi implements ICredentialType {
 	name = 'calDavApi';
 	displayName = 'CalDAV API';
-	documentationUrl = 'https://github.com/n8n-community/n8n-nodes-caldav-calendar';
+	documentationUrl = 'https://github.com/n8n-community/n8n-nodes-caldav-pro';
 
 	properties: INodeProperties[] = [
 		{
@@ -54,7 +54,7 @@ export class CalDavApi implements ICredentialType {
 				password: '={{ $credentials.password }}',
 			},
 			headers: {
-				'User-Agent': 'n8n-nodes-caldav-calendar/1.0.0',
+				'User-Agent': 'n8n-nodes-caldav-pro/1.0.0',
 			},
 		},
 	};

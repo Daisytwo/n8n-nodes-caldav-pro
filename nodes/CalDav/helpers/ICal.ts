@@ -105,7 +105,7 @@ export function buildVCalendarForEvent(event: EventInput, tzid: string): string 
 	const lines: string[] = [
 		'BEGIN:VCALENDAR',
 		'VERSION:2.0',
-		'PRODID:-//n8n-nodes-caldav-calendar//1.0.0//EN',
+		'PRODID:-//n8n-nodes-caldav-pro//1.0.0//EN',
 		'CALSCALE:GREGORIAN',
 	];
 

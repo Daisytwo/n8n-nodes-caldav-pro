@@ -1,4 +1,4 @@
-# n8n-nodes-caldav-calendar
+# n8n-nodes-caldav-pro
 
 [![npm](https://img.shields.io/badge/n8n-community%20node-FF6D5A.svg)](https://www.npmjs.com/) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -47,20 +47,20 @@ Additional guarantees:
 `Settings → Community Nodes → Install` and enter:
 
 ```
-n8n-nodes-caldav-calendar
+n8n-nodes-caldav-pro
 ```
 
 ### From npm (CLI install)
 
 ```bash
-npm install n8n-nodes-caldav-calendar
+npm install n8n-nodes-caldav-pro
 ```
 
 In Docker:
 
 ```bash
 docker exec -u 0 -it n8n \
-  npm install -g n8n-nodes-caldav-calendar
+  npm install -g n8n-nodes-caldav-pro
 ```
 
 The two nodes show up in the palette as **CalDAV** and **CalDAV Tool**.
@@ -303,7 +303,7 @@ npm install
 npm run build        # tsc + gulp (icons)
 npm run lint         # eslint
 npm test             # jest (all suites)
-npm run pack         # builds + emits n8n-nodes-caldav-calendar-1.0.0.tgz
+npm run pack         # builds + emits n8n-nodes-caldav-pro-1.0.0.tgz
 ```
 
 ---
