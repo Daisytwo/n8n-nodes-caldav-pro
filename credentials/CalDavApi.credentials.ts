@@ -54,7 +54,7 @@ export class CalDavApi implements ICredentialType {
 				password: '={{ $credentials.password }}',
 			},
 			headers: {
-				'User-Agent': 'n8n-nodes-caldav-pro/1.0.0',
+				'User-Agent': 'n8n-nodes-caldav-pro/1.1.0',
 			},
 		},
 	};

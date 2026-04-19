@@ -66,7 +66,7 @@ async function request(
 		method: options.method as IHttpRequestOptions['method'],
 		url: options.url,
 		headers: {
-			'User-Agent': 'n8n-nodes-caldav-pro/1.0.0',
+			'User-Agent': 'n8n-nodes-caldav-pro/1.1.0',
 			...options.headers,
 		},
 		body: options.body,

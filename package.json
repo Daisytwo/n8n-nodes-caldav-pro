@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-caldav-pro",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "n8n community nodes for CalDAV calendar servers (Infomaniak, Nextcloud, iCloud, Google Calendar via CalDAV, Radicale, Baikal, SOGo). Includes a standard node and an AI Agent tool node.",
   "keywords": [
     "n8n-community-node-package",
@@ -53,10 +53,14 @@
     ],
     "nodes": [
       "dist/nodes/CalDav/CalDav.node.js",
-      "dist/nodes/CalDav/CalDavTool.node.js"
+      "dist/nodes/CalDav/CalDavGetEventsTool.node.js",
+      "dist/nodes/CalDav/CalDavCreateEventTool.node.js",
+      "dist/nodes/CalDav/CalDavUpdateEventTool.node.js",
+      "dist/nodes/CalDav/CalDavDeleteEventTool.node.js"
     ]
   },
   "devDependencies": {
+    "@langchain/core": "^0.3.80",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.10",
     "@typescript-eslint/eslint-plugin": "^7.15.0",
@@ -68,9 +72,21 @@
     "n8n-workflow": "^1.82.0",
     "prettier": "^3.3.2",
     "ts-jest": "^29.1.5",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   },
   "peerDependencies": {
-    "n8n-workflow": "*"
+    "@langchain/core": "*",
+    "n8n-workflow": "*",
+    "zod": "*"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/core": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
   }
 }
