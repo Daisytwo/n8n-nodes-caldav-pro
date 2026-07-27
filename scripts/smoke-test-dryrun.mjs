@@ -49,8 +49,14 @@ function startOf(ics) {
 	);
 }
 
-function handle(method, path, body) {
+function handle(method, path, body, headers = {}) {
 	log.push(`${method} ${path}`);
+
+	// Header names arrive with the casing the caller used.
+	const header = (name) => {
+		const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+		return key ? String(headers[key]) : undefined;
+	};
 
 	if (method === 'PROPFIND') {
 		if (body.includes('current-user-principal')) {
@@ -71,10 +77,15 @@ function handle(method, path, body) {
 	}
 
 	if (method === 'PUT') {
-		const exists = store.has(path);
+		const existing = store.get(path);
+		if (header('if-none-match') === '*' && existing) return [412, 'already exists'];
+		const ifMatch = header('if-match');
+		if (ifMatch && (!existing || ifMatch.replace(/"/g, '') !== existing.etag.replace(/"/g, ''))) {
+			return [412, 'etag mismatch'];
+		}
 		const etag = `"etag-${++etagSeq}"`;
 		store.set(path, { body, etag });
-		return [exists ? 204 : 201, '', { etag }];
+		return [existing ? 204 : 201, '', { etag }];
 	}
 
 	if (method === 'GET') {
@@ -90,6 +101,20 @@ function handle(method, path, body) {
 	}
 
 	if (method === 'REPORT') {
+		// UID lookup: return the href of whichever resource carries that UID,
+		// which is how a real server answers a prop-filter query.
+		const uidFilter = /<c:prop-filter name="UID">\s*<c:text-match[^>]*>([^<]*)</.exec(body);
+		if (uidFilter) {
+			const wanted = uidFilter[1];
+			const match = [...store.entries()].find(
+				([p, item]) => p.startsWith(path) && new RegExp(`^UID:${wanted}\\s*$`, 'm').test(item.body),
+			);
+			return [
+				207,
+				multistatus(match ? propResponse(match[0], `<d:getetag>${match[1].etag}</d:getetag>`) : ''),
+			];
+		}
+
 		const range = /<c:time-range start="(\d{8}T\d{6}Z)" end="(\d{8}T\d{6}Z)"/.exec(body);
 		const toMs = (s) =>
 			Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(9, 11), +s.slice(11, 13), +s.slice(13, 15));
@@ -125,7 +150,7 @@ https.request = (options, callback) => {
 	req.end = () => {
 		let status, body, headers;
 		try {
-			[status, body, headers = {}] = handle(options.method, options.path, payload);
+			[status, body, headers = {}] = handle(options.method, options.path, payload, options.headers);
 		} catch (err) {
 			process.nextTick(() => req.emit('error', err));
 			return;
