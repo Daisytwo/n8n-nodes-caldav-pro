@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0]
+
+### Changed
+
+- **gulp removed.** A single task copied one SVG into the build output; gulp 4
+  is end-of-life and pulled in gulp-cli, liftoff, matchdep, chokidar, and
+  micromatch to do it. Replaced by `scripts/copy-icons.mjs`, which reproduces
+  the previous behaviour exactly.
+- **ESLint 8 → 9**, with a flat config (`eslint.config.mjs`) replacing
+  `.eslintrc.js`. `@typescript-eslint/parser` moves 7 → 8.
+- **`fast-xml-parser` 4 → 5** — a runtime dependency, and the only advisory
+  that reached installed users.
+
+### Added
+
+- `npm run lint:selftest`, which feeds a deliberate violation to each
+  eslint-plugin-n8n-nodes-base preset and fails if it goes unreported. Part of
+  `prepublishOnly`.
+
+### Removed
+
+- The plugin's `community` preset (19 rules against `package.json`) is no
+  longer configured. Its rules visit `ObjectExpression` while the JSON parser
+  emits `JSONObjectExpression`, so they never matched — verified inert under
+  ESLint 8 and 9 and under plugin 1.16.6 and 1.16.7. It was never enforcing
+  anything; the configuration only made it look as though it was.
+
+### Security
+
+- Advisories affecting installed users: **0** (was 1 moderate). Development
+  advisories drop from 24 to 5, all in ESLint's own `minimatch` chain. ESLint 10
+  would clear those but crashes eslint-plugin-n8n-nodes-base during traversal,
+  so the project stays on 9.
+
 ## [2.9.2]
 
 ### Added

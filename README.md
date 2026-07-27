@@ -225,12 +225,13 @@ If you find a bug or want a feature, open an issue — I'll fix it the same way.
 ## Development
 
 ```bash
-npm run dev        # tsc --watch
-npm run build      # tsc + gulp build:icons
-npm run lint       # eslint
-npm run format     # prettier
-npm test           # vitest — unit tests, no server needed
-npm run test:watch # vitest in watch mode
+npm run dev           # tsc --watch
+npm run build         # tsc + copy node icons into dist/
+npm run lint          # eslint (flat config, eslint.config.mjs)
+npm run lint:selftest # assert the n8n lint presets actually enforce
+npm run format        # prettier
+npm test              # vitest — unit tests, no server needed
+npm run test:watch    # vitest in watch mode
 ```
 
 The tests cover iCalendar generation, the update merge, recurrence expansion,
