@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1]
+
+### Fixed
+
+- A reversed or zero-width time window is rejected instead of being sent to the
+  server, which answers it with an empty result that reads as "no events" rather
+  than as the mistake it is. The error shows both bounds.
+- A **Lookahead Days** of zero or less is rejected on Get Next. The field's
+  `minValue` constrains the editor, not an expression that computes the value.
+
+### Added
+
+- CI on push and pull requests: build, lint self-test, lint, tests, the offline
+  smoke test, and a check on the contents of the published tarball. On a version
+  tag, the tag is compared against `package.json`.
+- `npm run check:package`, also wired into `prepublishOnly`.
+- `engines: node >=20.15`, matching what the shipped code needs. Development
+  requires Node 22 — `n8n-workflow` pulls in `isolated-vm`, which will not
+  install on 20 — but that does not reach consumers.
+
 ## [3.1.0]
 
 ### Added

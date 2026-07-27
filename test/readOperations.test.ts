@@ -498,3 +498,54 @@ describe('conditional delete', () => {
 		expect(del.headers['If-Match']).toBe('"stored-1"');
 	});
 });
+
+describe('time window validation', () => {
+	const window = (timeMin: unknown, timeMax: unknown) =>
+		run({
+			params: { ...base, operation: 'getAll', calendar: WORK, timeMin, timeMax },
+		});
+
+	it('rejects a reversed window', async () => {
+		await expect(window('2026-05-01T00:00:00Z', '2026-04-01T00:00:00Z')).rejects.toThrow(
+			/Time Max must be after Time Min/,
+		);
+	});
+
+	it('rejects a zero-width window', async () => {
+		// The server answers this with an empty result, which reads as
+		// "no events" rather than as the mistake it is.
+		await expect(window('2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z')).rejects.toThrow(
+			/Time Max must be after Time Min/,
+		);
+	});
+
+	it('names the offending field for an unparseable bound', async () => {
+		await expect(window('next tuesday', '2026-05-01T00:00:00Z')).rejects.toThrow(
+			/Time Min is not a valid date/,
+		);
+		await expect(window('2026-04-01T00:00:00Z', 'whenever')).rejects.toThrow(
+			/Time Max is not a valid date/,
+		);
+	});
+
+	it('accepts a normal window', async () => {
+		const { items } = await window('2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z');
+		expect(items).toEqual([]);
+	});
+
+	it('rejects a non-positive lookahead', async () => {
+		// typeOptions.minValue constrains the UI, not an expression.
+		for (const days of [0, -7]) {
+			await expect(
+				run({ params: { ...base, operation: 'getNext', calendar: WORK, lookaheadDays: days } }),
+			).rejects.toThrow(/Lookahead Days must be a positive number/);
+		}
+	});
+
+	it('accepts a positive lookahead', async () => {
+		const { items } = await run({
+			params: { ...base, operation: 'getNext', calendar: WORK, lookaheadDays: 7 },
+		});
+		expect(items).toEqual([]);
+	});
+});

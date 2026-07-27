@@ -408,6 +408,17 @@ export class CalDav implements INodeType {
 
 						if (operation === 'getNext') {
 							const lookaheadDays = this.getNodeParameter('lookaheadDays', i, 30) as number;
+							if (!Number.isFinite(lookaheadDays) || lookaheadDays <= 0) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Lookahead Days must be a positive number, got ${lookaheadDays}.`,
+									{
+										itemIndex: i,
+										// The minValue in the UI does not constrain expressions.
+										description: 'A zero or negative window can never contain an event.',
+									},
+								);
+							}
 							rangeStart = new Date();
 							rangeEnd = new Date(rangeStart.getTime() + lookaheadDays * 24 * 60 * 60 * 1000);
 							// A series can start before "now" and still have an occurrence
@@ -417,6 +428,20 @@ export class CalDav implements INodeType {
 						} else {
 							rangeStart = readWindowBound.call(this, i, 'timeMin', 'Time Min');
 							rangeEnd = readWindowBound.call(this, i, 'timeMax', 'Time Max');
+							// An inverted or empty window is silently answered with an empty
+							// result by the server, which reads as "no events" rather than
+							// as the mistake it is.
+							if (rangeEnd.getTime() <= rangeStart.getTime()) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Time Max must be after Time Min (got ${rangeStart.toISOString()} to ${rangeEnd.toISOString()}).`,
+									{
+										itemIndex: i,
+										description:
+											'The window is empty or reversed, so it can never match an event. Check the order of the two fields.',
+									},
+								);
+							}
 							if (operation === 'search') {
 								const query = this.getNodeParameter('query', i) as string;
 								accept = (event) => eventMatchesText(event, query);
