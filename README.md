@@ -189,31 +189,45 @@ You are a calendar assistant with access to a CalDAV tool.
 
 ## Tested with
 
-| Provider                 | Status      | Notes                                                                                           |
-| ------------------------ | ----------- | ----------------------------------------------------------------------------------------------- |
-| **Infomaniak Workspace** | ✅ Verified | End-to-end test passed against a real Infomaniak Workspace account (SabreDAV backend).          |
-| NextCloud                | 🟡 Expected | SabreDAV-based, same backend as Infomaniak. Base URL typically `https://<host>/remote.php/dav/`. |
-| iCloud                   | 🟡 Expected | Requires app-specific password. Base URL `https://caldav.icloud.com/`.                          |
-| Fastmail                 | 🟡 Expected | App password required. Base URL `https://caldav.fastmail.com/dav/`.                             |
-| Synology Calendar        | 🟡 Expected | Base URL `https://<nas-host>:5006/caldav.php/`.                                                 |
+| Provider                 | Status               | Notes                                                                                                                                                              |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Infomaniak Workspace** | ✅ Verified          | Full smoke test passes against a live account (SabreDAV backend) — see below.                                                                                       |
+| **Fastmail**             | ✅ Community-reported | Confirmed working in [#3](https://github.com/Daisytwo/n8n-nodes-caldav-pro/issues/3). Base URL `https://caldav.fastmail.com/dav` — no trailing slash. App password required; a read-only one works for reading, and read-only calendars show as 🔒. |
+| Radicale                 | ✅ Community-reported | Connecting and creating events confirmed in [#2](https://github.com/Daisytwo/n8n-nodes-caldav-pro/issues/2).                                                        |
+| NextCloud                | 🟡 Expected          | SabreDAV-based, same backend as Infomaniak. Base URL typically `https://<host>/remote.php/dav/`.                                                                    |
+| iCloud                   | 🟡 Expected          | Requires app-specific password. Base URL `https://caldav.icloud.com/`.                                                                                             |
+| Synology Calendar        | 🟡 Expected          | Base URL `https://<nas-host>:5006/caldav.php/`.                                                                                                                    |
 
-### Verified E2E run (Infomaniak Workspace)
+### Verified run against Infomaniak Workspace (3.0.0)
+
+`smoke-test.js`, run against a live account. Every object it creates is removed
+afterwards.
 
 ```
-═══ CalDAV E2E Test against Infomaniak ═══
-  Server: https://sync.infomaniak.com/
-  User:   <redacted>
+[1] Create with an explicit timezone
+    ✓ PUT accepted (201)
+    ✓ event is readable
+    ✓ start round-trips to the correct instant
+    ✓ timezone reported
+[2] Get Next and Search
+    ✓ seeded event appears among upcoming
+    ✓ keyword search finds exactly one
+[3] Update preserves fields it was not given
+    ✓ description / location / unmodelled CATEGORIES preserved
+    ✓ SEQUENCE incremented
+    ✓ stale If-Match is rejected with 412
+[4] Locate an event whose filename is not its UID
+    ✓ UID resolved to the real resource
+[5] Recurring series expansion
+    ✓ four occurrences, one week apart, distinct recurrenceIds
+[6] Move between calendars
+    – skipped, no second writable calendar on the test account
 
-[1] Authenticating (PROPFIND /)              → 207 ✓
-[2] Discover calendar-home-set               → /calendars/<user>/
-[3] Calendar > Get All                       → 5 calendars
-[4] Event > Create "CalDAV Pro E2E Test"     → PUT 201, ETag set
-[5] Event > Get All for today                → event present
-[6] Event > Delete                           → 204 ✓
-[7] Event > Get All again                    → event gone ✓
-
-═══ ALL TESTS PASSED ═══
+═══ ALL SMOKE TESTS PASSED ═══
 ```
+
+Move is therefore covered only by the offline harness (`npm run smoke:dryrun`),
+not against a live server.
 
 ## Known limitations / TODOs
 
