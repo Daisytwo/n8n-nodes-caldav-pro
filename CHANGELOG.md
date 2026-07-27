@@ -4,6 +4,67 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0]
+
+The first release since 2.6.1. Versions 2.7.0 through 2.11.0 were developed but
+never published; their entries are kept below for traceability. If you are
+upgrading from 2.6.x, this section is what matters.
+
+### BREAKING CHANGES
+
+1. **`start` and `end` changed format.** Timed events previously reported a
+   local wall clock with no offset (`2026-04-20T14:00:00`), which downstream
+   nodes re-read in the n8n host's timezone. They are now explicit UTC instants
+   (`2026-04-20T12:00:00.000Z`); all-day events report a bare date
+   (`2026-04-20`). Both sort correctly as strings. Any expression that compares,
+   slices, or parses these values needs review.
+
+2. **`raw` is no longer returned by default.** Read operations have a
+   **Simplify** toggle, on by default, which omits the full `VCALENDAR` source.
+   Turn it off where you depend on `raw`.
+
+3. **Update no longer creates a missing event.** It reads the stored object
+   first in order to preserve fields you did not supply, so a missing event is
+   now an error instead of a silent create. Use Create for that.
+
+4. **Events are written at different times than before — this is the fix, but
+   it will move existing workflows.** With **Timezone** set, 2.6.x emitted the
+   n8n host's wall clock under the requested `TZID`, shifting every event by the
+   host's UTC offset (two hours on a UTC host writing `Europe/Berlin`). All-day
+   events were written one calendar day early. If you compensated for either by
+   pre-shifting your input, remove that workaround or events will now be wrong
+   in the other direction.
+
+5. **All-day `DTEND` is now the exclusive end RFC 5545 requires.** A same-day
+   or end-of-day range used to encode a zero-length event; it now produces a
+   one-day event.
+
+### Added
+
+- Recurring series are expanded into the occurrences inside the queried window,
+  honouring `EXDATE` and `RECURRENCE-ID` overrides.
+- Events can be addressed by **Event URL** as well as UID, and a UID is
+  resolved against the server — so events created in Thunderbird, Apple
+  Calendar, or a web UI can be reached at all.
+- Calendars report `readOnly`, and read-only ones are marked 🔒 in the dropdown.
+- `recurrenceId` and `timezone` on returned events.
+- A test suite: 80 unit and integration tests, plus a smoke test that runs
+  against a real server and one that runs offline.
+
+### Fixed
+
+- Update preserves everything it was not asked to change, including properties
+  this node does not model (`CATEGORIES`, `ORGANIZER`, custom `X-` properties),
+  and is guarded by `If-Match` against concurrent edits.
+- A `TZID` with no accompanying `VTIMEZONE` is resolved against the named IANA
+  zone instead of the host's.
+- Writing to a read-only calendar explains itself instead of returning n8n's
+  generic "check your credentials".
+
+### Security
+
+- Advisories affecting installed users: **0**. `fast-xml-parser` moves 4 → 5.
+
 ## [2.11.0]
 
 ### Added

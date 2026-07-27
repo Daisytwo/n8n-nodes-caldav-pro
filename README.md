@@ -61,6 +61,20 @@ Read operations (`Get`, `Get Many`, `Get Next`, `Search`) return:
 - **Reminders (VALARM)**: multiple alarms per event, configurable minutes-before and action (Display / Email)
 - **Custom UID**: override the auto-generated UUID on create if you need a deterministic identifier
 
+## Upgrading from 2.6.x
+
+3.0.0 fixes several bugs that silently produced wrong data, so events are now
+written and reported differently. Read
+[CHANGELOG.md](CHANGELOG.md) before upgrading a live workflow — in short:
+
+- `start` / `end` are now UTC instants (`2026-04-20T12:00:00.000Z`) or bare
+  dates for all-day events, not offsetless local times.
+- `raw` is omitted unless you turn **Simplify** off.
+- **Update** no longer creates an event that does not exist.
+- Events with a **Timezone** were previously written shifted by the n8n host's
+  UTC offset, and all-day events one day early. Both are fixed — if you worked
+  around either by adjusting your input, remove that adjustment.
+
 ## Installation
 
 ### n8n Community Nodes (recommended)
