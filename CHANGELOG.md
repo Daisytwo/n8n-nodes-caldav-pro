@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0]
+
+### Added
+
+- **Entire Series** toggle on Delete and Update. Every occurrence of a
+  recurring event shares one UID and one resource, so deleting "tomorrow's
+  standup" by UID removes the whole series. That now has to be asked for: if
+  the target turns out to be recurring and the toggle is off, the operation is
+  refused and the error names the rule at stake.
+- Delete sends `If-Match` with the stored ETag, so an event modified since it
+  was read is not removed unseen. A `412` is reported as a conflict rather than
+  passed through raw.
+
+### Changed
+
+- **Delete on a recurring event now fails by default.** Previously it removed
+  every occurrence silently. Set **Entire Series** to restore the old
+  behaviour. Non-recurring events are unaffected.
+- Delete reads the event before removing it — one extra request, which is what
+  makes both the series check and the conditional delete possible. A missing
+  event is now reported as such instead of surfacing as a bare `404`.
+
 ## [3.0.0]
 
 The first release since 2.6.1. Versions 2.7.0 through 2.11.0 were developed but

@@ -49,6 +49,8 @@ interface Options {
 	homeWritable?: boolean;
 	/** Calendar URLs whose PUT/DELETE should return 403. */
 	writeFails?: string[];
+	/** iCalendar returned by GET on a single event resource. */
+	storedEvent?: string;
 }
 
 /**
@@ -92,6 +94,11 @@ function makeContext(opts: Options) {
 					'Work',
 				)}${collection('/calendars/bob/home/', 'Home', opts.homeWritable !== false)}</d:multistatus>`,
 			};
+		}
+		if (o.method === 'GET') {
+			const ics = opts.storedEvent;
+			if (!ics) return { statusCode: 404, headers: {}, body: 'not found' };
+			return { statusCode: 200, headers: { etag: '"stored-1"' }, body: ics };
 		}
 		if (o.method === 'PUT' || o.method === 'DELETE') {
 			if ((opts.writeFails ?? []).some((c) => String(o.url).startsWith(c))) {
@@ -384,5 +391,110 @@ describe('read-only calendars', () => {
 				writeFails: [HOME],
 			}),
 		).rejects.toThrow(/403 Forbidden/);
+	});
+});
+
+describe('recurring-series guard', () => {
+	const single = calendarData(vevent('e1', 'One off', '20260420T100000Z', '20260420T110000Z'));
+	const series = calendarData(
+		vevent(
+			'e1',
+			'Weekly standup',
+			'20260420T100000Z',
+			'20260420T103000Z',
+			'RRULE:FREQ=WEEKLY;BYDAY=MO',
+		),
+	);
+	const del = (extra: Record<string, unknown> = {}) => ({
+		resource: 'event',
+		operation: 'delete',
+		calendar: WORK,
+		uid: 'e1',
+		...extra,
+	});
+
+	it('deletes a plain event without any confirmation', async () => {
+		const { items } = await run({ params: del(), storedEvent: single });
+		expect(items[0].deleted).toBe(true);
+	});
+
+	it('refuses to delete a series unless it is asked for', async () => {
+		// Deleting "tomorrow's standup" by UID removes every occurrence. An
+		// agent acting on a user's behalf must not be able to do that silently.
+		await expect(run({ params: del(), storedEvent: series })).rejects.toThrow(
+			/recurring series.*affect every occurrence/s,
+		);
+	});
+
+	it('names the rule so the caller can see what is at stake', async () => {
+		await expect(run({ params: del(), storedEvent: series })).rejects.toThrow(
+			/FREQ=WEEKLY;BYDAY=MO/,
+		);
+	});
+
+	it('deletes the series once Entire Series is set', async () => {
+		const { items, ctx } = await run({
+			params: del({ entireSeries: true }),
+			storedEvent: series,
+		});
+		expect(items[0].deleted).toBe(true);
+		expect(ctx.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
+	});
+
+	it('applies the same guard to update', async () => {
+		await expect(
+			run({
+				params: {
+					resource: 'event',
+					operation: 'update',
+					calendar: WORK,
+					uid: 'e1',
+					summary: 'Renamed',
+					start: '2026-04-20T10:00:00Z',
+					end: '2026-04-20T11:00:00Z',
+				},
+				storedEvent: series,
+			}),
+		).rejects.toThrow(/recurring series.*update/s);
+	});
+
+	it('lets update through for a plain event', async () => {
+		const { items } = await run({
+			params: {
+				resource: 'event',
+				operation: 'update',
+				calendar: WORK,
+				uid: 'e1',
+				summary: 'Renamed',
+				start: '2026-04-20T10:00:00Z',
+				end: '2026-04-20T11:00:00Z',
+			},
+			storedEvent: single,
+		});
+		expect(items[0].updated).toBe(true);
+	});
+
+	it('reports a missing event instead of deleting nothing quietly', async () => {
+		await expect(run({ params: del() })).rejects.toThrow(/was not found/);
+	});
+});
+
+describe('conditional delete', () => {
+	const single = calendarData(vevent('e1', 'One off', '20260420T100000Z', '20260420T110000Z'));
+
+	it('sends If-Match with the stored ETag', async () => {
+		const ctx = makeContext({
+			params: { resource: 'event', operation: 'delete', calendar: WORK, uid: 'e1' },
+			storedEvent: single,
+		});
+		const seen: any[] = [];
+		const original = ctx.helpers.httpRequestWithAuthentication;
+		ctx.helpers.httpRequestWithAuthentication = (async (cred: string, o: any) => {
+			seen.push(o);
+			return original(cred, o);
+		}) as any;
+		await new CalDav().execute.call(ctx as any);
+		const del = seen.find((o) => o.method === 'DELETE');
+		expect(del.headers['If-Match']).toBe('"stored-1"');
 	});
 });

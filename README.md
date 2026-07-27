@@ -235,7 +235,7 @@ not against a live server.
 2. **No Free/Busy** (`calendar-availability`) — only the basic `calendar-query` REPORT.
 3. **No attachments** (VEVENT ATTACH property).
 4. **No scheduling / RSVP** — attendees are written as ATTENDEE lines, but no server-side `METHOD:REQUEST` invitation email is triggered.
-5. **Recurrence is per-series, not per-occurrence** — reads expand a series into its occurrences, but all occurrences share one UID and one URL. Deleting or updating by UID therefore affects the whole series; there is no way to change a single occurrence.
+5. **Recurrence is per-series, not per-occurrence** — reads expand a series into its occurrences, but all occurrences share one UID and one URL. Deleting or updating by UID therefore affects the whole series; there is no way to change a single occurrence. Because that is rarely what the caller means, Delete and Update refuse to touch a recurring event unless **Entire Series** is switched on.
 6. **No `VTIMEZONE` is written** — events are stored with a `TZID` parameter but without the matching `VTIMEZONE` component. Clients resolve IANA identifiers from their own database, so this works in practice, but it is not strictly RFC 5545 compliant.
 
 ## Built with AI

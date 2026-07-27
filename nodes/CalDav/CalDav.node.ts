@@ -21,6 +21,7 @@ import {
 	parseICalEvent,
 	resolveDefaultCalendar,
 	resolveEventUrl,
+	seriesRecurrenceRule,
 	simplifyEvent,
 	eventMatchesText,
 	type CalDavEvent,
@@ -54,6 +55,34 @@ function rethrowWriteError(
 		);
 	}
 	throw error;
+}
+
+/**
+ * Refuse a write that would silently hit an entire recurring series.
+ *
+ * Every occurrence shares one UID and one resource, so deleting "tomorrow's
+ * standup" by UID removes the whole series. That is rarely what the caller
+ * meant, and when an AI Agent drives the node it is not what the *user* meant
+ * either — so it has to be asked for explicitly.
+ */
+function guardRecurringSeries(
+	this: IExecuteFunctions,
+	raw: string,
+	itemIndex: number,
+	verb: 'delete' | 'update',
+) {
+	const rule = seriesRecurrenceRule(raw);
+	if (!rule) return;
+	if (this.getNodeParameter('entireSeries', itemIndex, false) as boolean) return;
+	throw new NodeOperationError(
+		this.getNode(),
+		`This event is a recurring series (${rule}), so the ${verb} would affect every occurrence.`,
+		{
+			itemIndex,
+			description:
+				'Turn on "Entire Series" to confirm that is what you want. Changing or removing a single occurrence is not supported yet — all occurrences share one UID and one resource on the server.',
+		},
+	);
 }
 
 /**
@@ -484,6 +513,7 @@ export class CalDav implements INodeType {
 							}
 							throw err;
 						}
+						guardRecurringSeries.call(this, existing.body, i, 'update');
 						const currentEtag = (existing.headers.etag as string | undefined)?.replace(/"/g, '');
 
 						const iCal = patchICalEvent(existing.body, {
@@ -530,9 +560,49 @@ export class CalDav implements INodeType {
 						});
 					} else if (operation === 'delete') {
 						const { uid, eventUrl } = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
-						await davRequest
-							.call(this, 'DELETE', eventUrl)
-							.catch((err) => rethrowWriteError.call(this, err, i, calUrlNormalised));
+
+						// Read before removing: this is what tells us whether the
+						// resource holds a whole series, and its ETag makes the delete
+						// conditional so a concurrent edit isn't discarded unseen.
+						let stored;
+						try {
+							stored = await davRequest.call(this, 'GET', eventUrl, undefined, {
+								Accept: 'text/calendar',
+							});
+						} catch (err) {
+							if ((err as { httpCode?: string }).httpCode === '404') {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Event "${uid || eventUrl}" was not found in this calendar.`,
+									{ itemIndex: i, description: 'Nothing was deleted.' },
+								);
+							}
+							throw err;
+						}
+						guardRecurringSeries.call(this, stored.body, i, 'delete');
+
+						const storedEtag = (stored.headers.etag as string | undefined)?.replace(/"/g, '');
+						try {
+							await davRequest.call(
+								this,
+								'DELETE',
+								eventUrl,
+								undefined,
+								storedEtag ? { 'If-Match': `"${storedEtag}"` } : undefined,
+							);
+						} catch (err) {
+							if ((err as { httpCode?: string }).httpCode === '412') {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Event "${uid || eventUrl}" was modified by someone else, so it was not deleted.`,
+									{
+										itemIndex: i,
+										description: 'Re-read the event and retry if you still want it gone.',
+									},
+								);
+							}
+							rethrowWriteError.call(this, err, i, calUrlNormalised);
+						}
 						returnData.push({ json: { uid, url: eventUrl, deleted: true }, pairedItem: { item: i } });
 					} else {
 						throw new NodeOperationError(this.getNode(), `Unknown event operation: ${operation}`);

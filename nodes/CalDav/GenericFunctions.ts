@@ -972,6 +972,25 @@ export function parseICalEvent(raw: string, url: string, etag?: string): CalDavE
 	}
 }
 
+/**
+ * The recurrence rule of the series master, if the object holds one.
+ *
+ * Used to recognise that a write would hit an entire series rather than the
+ * single event the caller had in mind: every occurrence shares one UID and one
+ * resource, so a delete by UID removes all of them.
+ */
+export function seriesRecurrenceRule(raw: string): string | undefined {
+	try {
+		const comp = new ICAL.Component(ICAL.parse(raw));
+		const vevents = comp.getAllSubcomponents('vevent');
+		const master = vevents.find((v: any) => !v.hasProperty('recurrence-id'));
+		const rule = master?.getFirstProperty('rrule')?.getFirstValue();
+		return rule ? String(rule) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // Guard rails for pathological series (an RRULE with no UNTIL/COUNT over a wide
 // window, or a corrupt rule that fails to advance).
 const MAX_OCCURRENCES_PER_OBJECT = 1000;

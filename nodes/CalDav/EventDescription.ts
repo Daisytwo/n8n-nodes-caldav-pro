@@ -116,6 +116,20 @@ export const eventFields: INodeProperties[] = [
 		},
 	},
 	{
+		displayName: 'Entire Series',
+		name: 'entireSeries',
+		type: 'boolean',
+		default: false,
+		description:
+			'Whether to act on every occurrence of a recurring event. All occurrences of a series share one UID and one resource, so deleting or updating by UID always hits the whole series — there is no way to change a single occurrence yet. When the target turns out to be recurring and this is off, the operation is refused rather than silently affecting every occurrence. Has no effect on non-recurring events.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['delete', 'update'],
+			},
+		},
+	},
+	{
 		displayName: 'Target Calendar Name or ID',
 		name: 'targetCalendar',
 		type: 'options',
