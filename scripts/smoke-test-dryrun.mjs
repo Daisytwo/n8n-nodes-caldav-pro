@@ -59,6 +59,15 @@ function handle(method, path, body, headers = {}) {
 	};
 
 	if (method === 'PROPFIND') {
+		if (body.includes('current-user-privilege-set')) {
+			// Mirror a real account: one writable calendar, the rest read-only.
+			const writable = path === CALENDARS[0].href || path === CALENDARS[1].href;
+			const privilege = (p) => `<d:privilege><d:${p}/></d:privilege>`;
+			const set = writable
+				? ['read', 'write', 'write-content', 'bind', 'unbind'].map(privilege).join('')
+				: ['read', 'read-acl', 'read-current-user-privilege-set'].map(privilege).join('');
+			return [207, multistatus(propResponse(path, `<d:current-user-privilege-set>${set}</d:current-user-privilege-set>`))];
+		}
 		if (body.includes('current-user-principal')) {
 			return [207, multistatus(propResponse('/', '<d:current-user-principal><d:href>/principals/tester/</d:href></d:current-user-principal>'))];
 		}
