@@ -267,9 +267,13 @@ npm run test:watch    # vitest in watch mode
 npm run smoke:dryrun  # smoke test against an in-memory server
 ```
 
-CI runs all of these on push and on pull requests, across Node 20 and 22. The
-live smoke test is not part of it — it needs credentials and writes to a real
-calendar.
+CI runs all of these on push and on pull requests. The live smoke test is not
+part of it — it needs credentials and writes to a real calendar.
+
+Development requires Node 22: `n8n-workflow`, a dev dependency, pulls in
+`isolated-vm`, which declares `engines >=22.0.0` and fails to install on Node
+20. The published package is unaffected — it depends only on `fast-xml-parser`
+and `ical.js`, and supports Node 20.15+.
 
 The tests cover iCalendar generation, the update merge, recurrence expansion,
 event lookup, and the read operations end to end against a fake CalDAV server —

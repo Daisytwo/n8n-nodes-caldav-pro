@@ -18,18 +18,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # The floor is what vitest supports (^18 || ^20 || >=22); 20 and 22 are
-        # the versions n8n itself runs on.
-        node: ['20', '22']
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22 only, and not by preference: the dev toolchain pulls
+      # n8n-workflow -> @n8n/expression-runtime -> isolated-vm, a native module
+      # declaring engines >=22.0.0. On Node 20 the install fails outright rather
+      # than warning, so a Node 20 job cannot even reach the tests.
+      #
+      # This constrains development, not consumers. The published package
+      # depends only on fast-xml-parser and ical.js — `npm ls --omit=dev` shows
+      # no isolated-vm — which is why package.json still declares >=20.15.
+      # Re-adding a Node 20 matrix entry will go red at `npm ci`.
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: '22'
           cache: npm
 
       - run: npm ci
