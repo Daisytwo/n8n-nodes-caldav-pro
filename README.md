@@ -274,16 +274,27 @@ from the event's, which is the normal case in Docker.
 
 ### Manual testing against your CalDAV server
 
-Local test scripts (`e2e-test.js`, `smoke-test.js`) live in `.gitignore` so they
-never end up in the published repo or npm package. To verify the build against
-a real server during development, install the node into your local n8n custom
-folder via `npm link` (see "Local development" above) and trigger the operations
-through the n8n UI — that's the canonical integration path.
+`smoke-test.js` exercises a real server end to end: discovery, create, read,
+update with `If-Match`, UID lookup, recurrence expansion, and move. It removes
+everything it creates, and lists anything it could not remove.
 
-If you want a headless smoke check, write a small script that imports from
-`dist/nodes/CalDav/GenericFunctions.js` and calls `discoverCalendars`,
-`buildICalEvent`, `parseCalendarQueryResponse` directly. Read credentials
-from environment variables — never hard-code them.
+Put your credentials in a `.env` next to it — see `.env.example`. That file is
+gitignored and cannot reach the npm package, which ships only `dist/`. Use an
+app password and revoke it when you are done.
+
+```bash
+CALDAV_TEST_CALENDARS=Test1,Test2 node smoke-test.js
+```
+
+`CALDAV_TEST_CALENDARS` picks which writable calendars to use. Set it: the
+script creates, moves, and deletes events, so it should not run loose in a
+calendar you actually use. Without it, the first two writable calendars are
+taken — read-only ones are skipped automatically, since shared calendars and
+subscribed feeds reject writes.
+
+Run `npm run smoke:dryrun` first. It executes the same script against an
+in-memory CalDAV server, so a scripting error surfaces before anything touches
+a real calendar.
 
 ## License
 

@@ -5,7 +5,9 @@ dist/
 .env
 *.tsbuildinfo
 
-# Local test scripts — exercise the live CalDAV server with real credentials
-# (read from env vars). Useful during development but not for the public repo.
+# Superseded by smoke-test.js, which covers everything this did and more.
 e2e-test.js
-smoke-test.js
+
+# smoke-test.js is tracked: it holds no credentials, only references to
+# CALDAV_* environment variables. The credentials themselves live in .env,
+# which is ignored above.
