@@ -32,6 +32,7 @@
     "lint:selftest": "node scripts/lint-selftest.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "smoke:dryrun": "node scripts/smoke-test-dryrun.mjs",
     "prepublishOnly": "npm run build && npm run lint:selftest && npm run lint && npm test"
   },
   "files": [
