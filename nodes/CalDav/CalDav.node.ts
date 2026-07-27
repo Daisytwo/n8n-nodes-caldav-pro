@@ -29,6 +29,34 @@ import { calendarOperations, calendarFields } from './CalendarDescription';
 import { eventOperations, eventFields } from './EventDescription';
 
 /**
+ * Explain a 403 from a write instead of passing "Forbidden" through.
+ *
+ * The usual cause is a read-only calendar — one shared with you, or a
+ * subscribed feed such as a holiday calendar. Servers say nothing beyond the
+ * status code, and such calendars are indistinguishable from writable ones
+ * once a URL has been copied into an expression.
+ */
+function rethrowWriteError(
+	this: IExecuteFunctions,
+	error: unknown,
+	itemIndex: number,
+	calendarUrl: string,
+): never {
+	if ((error as { httpCode?: string }).httpCode === '403') {
+		throw new NodeOperationError(
+			this.getNode(),
+			`The calendar rejected the write (403 Forbidden): ${calendarUrl}`,
+			{
+				itemIndex,
+				description:
+					'This is usually a read-only calendar — one shared with you, or a subscribed feed. Read-only calendars are marked 🔒 in the Calendar dropdown, and Calendar > Get Many reports "readOnly": true for them. Pick a calendar you own.',
+			},
+		);
+	}
+	throw error;
+}
+
+/**
  * Work out which resource an operation should act on, from whichever of
  * Event URL / Event UID the caller supplied.
  */
@@ -212,10 +240,15 @@ export class CalDav implements INodeType {
 						name: '⭐ All Calendars (Search Across)',
 						value: '__ALL__',
 					},
-					...calendars.map((c) => ({
-						name: c.displayName,
-						value: c.url,
-					})),
+					// Writable calendars first, and read-only ones marked: a shared
+					// calendar or a subscribed feed looks identical otherwise, and
+					// writing to one fails with a bare 403.
+					...[...calendars]
+						.sort((a, b) => Number(a.readOnly ?? false) - Number(b.readOnly ?? false))
+						.map((c) => ({
+							name: c.readOnly ? `🔒 ${c.displayName} (Read-Only)` : c.displayName,
+							value: c.url,
+						})),
 				];
 			},
 		},
@@ -307,10 +340,12 @@ export class CalDav implements INodeType {
 							reminders: remindersRaw,
 						});
 						const eventUrl = `${calUrlNormalised}${encodeURIComponent(uid)}.ics`;
-						const resp = await davRequest.call(this, 'PUT', eventUrl, iCal, {
-							'Content-Type': 'text/calendar; charset=utf-8',
-							'If-None-Match': '*',
-						});
+						const resp = await davRequest
+							.call(this, 'PUT', eventUrl, iCal, {
+								'Content-Type': 'text/calendar; charset=utf-8',
+								'If-None-Match': '*',
+							})
+							.catch((err) => rethrowWriteError.call(this, err, i, calUrlNormalised));
 						const etag = (resp.headers.etag as string | undefined)?.replace(/"/g, '');
 						returnData.push({
 							json: { uid, url: eventUrl, etag, summary, start, end },
@@ -398,10 +433,14 @@ export class CalDav implements INodeType {
 						const uid =
 							located.uid || parseICalEvent(getResp.body, sourceEventUrl)?.uid || randomUUID();
 						const targetEventUrl = `${targetUrl}${encodeURIComponent(uid)}.ics`;
-						const putResp = await davRequest.call(this, 'PUT', targetEventUrl, getResp.body, {
-							'Content-Type': 'text/calendar; charset=utf-8',
-							'If-None-Match': '*',
-						});
+						// If this throws, the source is left untouched — a move must never
+						// destroy the original when the copy did not land.
+						const putResp = await davRequest
+							.call(this, 'PUT', targetEventUrl, getResp.body, {
+								'Content-Type': 'text/calendar; charset=utf-8',
+								'If-None-Match': '*',
+							})
+							.catch((err) => rethrowWriteError.call(this, err, i, targetUrl));
 						const newEtag = (putResp.headers.etag as string | undefined)?.replace(/"/g, '');
 						await davRequest.call(this, 'DELETE', sourceEventUrl, undefined, sourceEtag ? { 'If-Match': `"${sourceEtag}"` } : undefined);
 						returnData.push({
@@ -468,6 +507,9 @@ export class CalDav implements INodeType {
 						try {
 							resp = await davRequest.call(this, 'PUT', eventUrl, iCal, putHeaders);
 						} catch (err) {
+							if ((err as { httpCode?: string }).httpCode === '403') {
+								rethrowWriteError.call(this, err, i, calUrlNormalised);
+							}
 							if ((err as { httpCode?: string }).httpCode === '412') {
 								throw new NodeOperationError(
 									this.getNode(),
@@ -488,7 +530,9 @@ export class CalDav implements INodeType {
 						});
 					} else if (operation === 'delete') {
 						const { uid, eventUrl } = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
-						await davRequest.call(this, 'DELETE', eventUrl);
+						await davRequest
+							.call(this, 'DELETE', eventUrl)
+							.catch((err) => rethrowWriteError.call(this, err, i, calUrlNormalised));
 						returnData.push({ json: { uid, url: eventUrl, deleted: true }, pairedItem: { item: i } });
 					} else {
 						throw new NodeOperationError(this.getNode(), `Unknown event operation: ${operation}`);

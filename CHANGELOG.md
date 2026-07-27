@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0]
+
+### Added
+
+- Calendars report **`readOnly`**, taken from the server's
+  `current-user-privilege-set`. It rides along on the listing discovery already
+  performs, so it costs no extra request.
+- Read-only calendars are marked `🔒 … (Read-Only)` in the Calendar dropdown
+  and sorted after the writable ones.
+
+### Fixed
+
+- Writing to a calendar you cannot write to produced n8n's generic
+  `Forbidden - perhaps check your credentials?`, which points at the wrong
+  cause entirely. Such a 403 now explains that the calendar is read-only —
+  typically one shared with you, or a subscribed feed — and how to find one
+  that is not.
+
+### Notes
+
+- A server that does not report privileges leaves `readOnly` undefined rather
+  than assuming read-only, so nothing is mislabelled or blocked on servers
+  without the property.
+- Found by running the smoke test against a real account, where five of six
+  calendars turned out to be read-only while looking identical in the dropdown.
+
 ## [2.10.0]
 
 ### Changed

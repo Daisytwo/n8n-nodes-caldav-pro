@@ -59,7 +59,9 @@ function handle(method, path, body, headers = {}) {
 	};
 
 	if (method === 'PROPFIND') {
-		if (body.includes('current-user-privilege-set')) {
+		// Order matters: the calendar listing now also asks for privileges, so
+		// the privilege-only probe is identified by the absence of resourcetype.
+		if (body.includes('current-user-privilege-set') && !body.includes('resourcetype')) {
 			// Mirror a real account: one writable calendar, the rest read-only.
 			const writable = path === CALENDARS[0].href || path === CALENDARS[1].href;
 			const privilege = (p) => `<d:privilege><d:${p}/></d:privilege>`;

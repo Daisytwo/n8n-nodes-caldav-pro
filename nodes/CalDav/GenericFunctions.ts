@@ -15,6 +15,13 @@ export interface CalDavCalendar {
 	displayName: string;
 	color?: string;
 	ctag?: string;
+	/**
+	 * True when the server reports no write privilege for this account —
+	 * typically a calendar shared with you, or a subscribed feed such as a
+	 * holiday calendar. Undefined when the server does not report privileges
+	 * at all, which must not be read as "read-only".
+	 */
+	readOnly?: boolean;
 }
 
 export interface CalDavEvent {
@@ -314,6 +321,25 @@ function parsePatterns(input: string | undefined): Array<(value: string) => bool
  * from the credential (allow-list first, block-list always wins).
  */
 /**
+ * Whether the account lacks write access to a collection, from the DAV
+ * current-user-privilege-set the listing asked for.
+ *
+ * Returns undefined when the server reports no privileges at all — that means
+ * "unknown", not "read-only", and must not be used to block writes.
+ */
+function readOnlyFromPrivileges(prop: any): boolean | undefined {
+	const entries = prop?.['current-user-privilege-set']?.privilege;
+	if (!entries) return undefined;
+	const names: string[] = [];
+	for (const entry of Array.isArray(entries) ? entries : [entries]) {
+		if (entry && typeof entry === 'object') names.push(...Object.keys(entry));
+		else if (typeof entry === 'string') names.push(entry);
+	}
+	if (!names.length) return undefined;
+	return !names.some((n) => n === 'write' || n === 'write-content' || n === 'all');
+}
+
+/**
  * Per-execution memo for the calendar list.
  *
  * n8n hands `execute` one context object for the whole node run, so keying on
@@ -350,11 +376,14 @@ async function discoverCalendarsUncached(
 	username: string,
 ): Promise<CalDavCalendar[]> {
 	const home = await discoverCalendarHome.call(this, serverUrl, username);
+	// current-user-privilege-set rides along on the listing we already make, so
+	// knowing which calendars are writable costs no extra request.
 	const body = `<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:ic="http://apple.com/ns/ical/">
   <d:prop>
     <d:resourcetype/>
     <d:displayname/>
+    <d:current-user-privilege-set/>
     <cs:getctag/>
     <ic:calendar-color/>
   </d:prop>
@@ -377,6 +406,7 @@ async function discoverCalendarsUncached(
 			displayName: String(displayName).trim() || href,
 			color: prop?.['calendar-color'],
 			ctag: prop?.['getctag'],
+			readOnly: readOnlyFromPrivileges(prop),
 		});
 	}
 

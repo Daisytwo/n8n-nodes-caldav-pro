@@ -8,7 +8,7 @@ Drop it into a workflow to read, create, update, or delete calendar events — o
 
 This node gives n8n a full CRUD interface to CalDAV calendars. In practical terms:
 
-- **List your calendars** — auto-discovers every calendar on the server via CalDAV's well-known endpoints. No hard-coded URLs.
+- **List your calendars** — auto-discovers every calendar on the server via CalDAV's well-known endpoints. No hard-coded URLs. Calendars you cannot write to — ones shared with you, or subscribed feeds like holiday calendars — are reported as `readOnly` and marked 🔒 in the dropdown, so a write does not fail with an unexplained 403.
 - **Create events** with title, start/end (ISO 8601 with timezone), description, location, attendees, recurrence (RRULE), and multiple reminders (VALARM).
 - **Fetch events** for any time window via server-side `REPORT` queries — fast even on calendars with thousands of events.
 - **Expand recurring series** — a weekly meeting is returned as the individual occurrences that fall inside your window, with `EXDATE` exclusions and moved instances (`RECURRENCE-ID`) applied.

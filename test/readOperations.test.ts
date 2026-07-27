@@ -43,6 +43,12 @@ interface Options {
 	reportFails?: string[];
 	/** Number of input items the node is executed over. */
 	itemCount?: number;
+	/** Set false to simulate a server that reports no privileges at all. */
+	reportPrivileges?: boolean;
+	/** Set false to make the "Home" calendar read-only. */
+	homeWritable?: boolean;
+	/** Calendar URLs whose PUT/DELETE should return 403. */
+	writeFails?: string[];
 }
 
 /**
@@ -70,16 +76,28 @@ function makeContext(opts: Options) {
 				};
 			}
 			// Calendar collection listing.
-			const collection = (href: string, name: string) =>
-				`<d:response><d:href>${href}</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>${name}</d:displayname></d:prop></d:propstat></d:response>`;
+			const privileges = (writable: boolean) =>
+				opts.reportPrivileges === false
+					? ''
+					: `<d:current-user-privilege-set>${(writable ? ['read', 'write'] : ['read'])
+							.map((p) => `<d:privilege><d:${p}/></d:privilege>`)
+							.join('')}</d:current-user-privilege-set>`;
+			const collection = (href: string, name: string, writable = true) =>
+				`<d:response><d:href>${href}</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>${name}</d:displayname>${privileges(writable)}</d:prop></d:propstat></d:response>`;
 			return {
 				statusCode: 207,
 				headers: {},
 				body: `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">${collection(
 					'/calendars/bob/work/',
 					'Work',
-				)}${collection('/calendars/bob/home/', 'Home')}</d:multistatus>`,
+				)}${collection('/calendars/bob/home/', 'Home', opts.homeWritable !== false)}</d:multistatus>`,
 			};
+		}
+		if (o.method === 'PUT' || o.method === 'DELETE') {
+			if ((opts.writeFails ?? []).some((c) => String(o.url).startsWith(c))) {
+				return { statusCode: 403, headers: {}, body: 'forbidden' };
+			}
+			return { statusCode: 201, headers: { etag: '"w1"' }, body: '' };
 		}
 		if (o.method === 'REPORT') {
 			if (opts.reportFails?.includes(o.url)) {
@@ -316,5 +334,55 @@ describe('All Calendars', () => {
 			reportFails: [WORK],
 		});
 		expect(items.map((e) => e.summary)).toEqual(['Home item']);
+	});
+});
+
+describe('read-only calendars', () => {
+	const listCalendars = async (opts: Partial<Options> = {}) => {
+		const { items } = await run({
+			params: { resource: 'calendar', operation: 'getAll' },
+			...opts,
+		} as Options);
+		return items;
+	};
+
+	it('reports readOnly from the server privileges', async () => {
+		const items = await listCalendars({ homeWritable: false });
+		expect(items.map((c) => [c.displayName, c.readOnly])).toEqual([
+			['Work', false],
+			['Home', true],
+		]);
+	});
+
+	it('leaves readOnly undefined when the server reports no privileges', async () => {
+		// Absent privileges mean "unknown". Treating that as read-only would
+		// mislabel every calendar on servers that do not implement the property.
+		const items = await listCalendars({ reportPrivileges: false });
+		expect(items.every((c) => c.readOnly === undefined)).toBe(true);
+	});
+
+	it('costs no additional request', async () => {
+		const ctx = makeContext({ params: { resource: 'calendar', operation: 'getAll' } });
+		await new CalDav().execute.call(ctx as any);
+		const listings = ctx.requests.filter(
+			(r) => r.method === 'PROPFIND' && r.url === 'https://dav.example.com/calendars/bob/',
+		);
+		expect(listings).toHaveLength(1);
+	});
+
+	it('explains a 403 on write instead of passing it through', async () => {
+		await expect(
+			run({
+				params: {
+					resource: 'event',
+					operation: 'create',
+					calendar: HOME,
+					summary: 'Nope',
+					start: '2026-04-20T10:00:00Z',
+					end: '2026-04-20T11:00:00Z',
+				},
+				writeFails: [HOME],
+			}),
+		).rejects.toThrow(/403 Forbidden/);
 	});
 });
