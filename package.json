@@ -30,10 +30,11 @@
     "lint": "eslint nodes credentials",
     "lintfix": "eslint nodes credentials --fix",
     "lint:selftest": "node scripts/lint-selftest.mjs",
+    "check:package": "node scripts/check-package.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:dryrun": "node scripts/smoke-test-dryrun.mjs",
-    "prepublishOnly": "npm run build && npm run lint:selftest && npm run lint && npm test"
+    "prepublishOnly": "npm run build && npm run lint:selftest && npm run lint && npm test && npm run check:package"
   },
   "files": [
     "dist",
@@ -54,6 +55,9 @@
   },
   "peerDependencies": {
     "n8n-workflow": "*"
+  },
+  "engines": {
+    "node": ">=20.15"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

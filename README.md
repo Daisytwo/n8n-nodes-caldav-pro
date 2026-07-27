@@ -1,5 +1,8 @@
 # n8n-nodes-caldav-pro
 
+[![CI](https://github.com/Daisytwo/n8n-nodes-caldav-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/Daisytwo/n8n-nodes-caldav-pro/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/n8n-nodes-caldav-pro)](https://www.npmjs.com/package/n8n-nodes-caldav-pro)
+
 A community node for [n8n](https://n8n.io) that connects your workflows to any **CalDAV calendar** — Infomaniak, NextCloud, iCloud, Fastmail, Synology, SOGo, Radicale, and any other RFC 4791-compliant server.
 
 Drop it into a workflow to read, create, update, or delete calendar events — or let an **AI Agent** use it as a tool and manage your calendar from a chat prompt.
@@ -257,10 +260,16 @@ npm run dev           # tsc --watch
 npm run build         # tsc + copy node icons into dist/
 npm run lint          # eslint (flat config, eslint.config.mjs)
 npm run lint:selftest # assert the n8n lint presets actually enforce
+npm run check:package # assert the tarball has what it should and nothing more
 npm run format        # prettier
 npm test              # vitest — unit tests, no server needed
 npm run test:watch    # vitest in watch mode
+npm run smoke:dryrun  # smoke test against an in-memory server
 ```
+
+CI runs all of these on push and on pull requests, across Node 20 and 22. The
+live smoke test is not part of it — it needs credentials and writes to a real
+calendar.
 
 The tests cover iCalendar generation, the update merge, recurrence expansion,
 event lookup, and the read operations end to end against a fake CalDAV server —
