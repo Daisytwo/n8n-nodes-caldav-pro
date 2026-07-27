@@ -1,0 +1,16 @@
+# Normalise line endings in the repository to LF regardless of the checkout
+# platform. Without this, committing from Windows stores CRLF and every file
+# shows up as fully rewritten to contributors on other systems.
+#
+# Note: this governs the *files*, not the iCalendar output. RFC 5545 requires
+# CRLF between content lines, and that comes from "\r\n" escapes in the source,
+# which are unaffected by this setting.
+* text=auto eol=lf
+
+# Binary assets must never be touched.
+*.svg text eol=lf
+*.png binary
+*.ico binary
+
+# Generated — collapse in diffs and exclude from language statistics.
+package-lock.json -diff linguist-generated

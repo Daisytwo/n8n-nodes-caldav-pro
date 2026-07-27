@@ -24,10 +24,18 @@ export interface CalDavEvent {
 	summary?: string;
 	description?: string;
 	location?: string;
+	/** All-day events: "YYYY-MM-DD". Timed events: an ISO 8601 UTC instant. */
 	start?: string;
 	end?: string;
 	allDay?: boolean;
+	/** The TZID the event is stored under, when it has one. */
+	timezone?: string;
 	rrule?: string;
+	/**
+	 * Set on a single occurrence of a recurring series, identifying which slot
+	 * it is. All occurrences of a series share one UID and one URL.
+	 */
+	recurrenceId?: string;
 	attendees?: string[];
 	reminders?: Array<{ minutesBefore: number; action: string }>;
 	raw?: string;
@@ -216,11 +224,127 @@ export async function discoverCalendarHome(
 }
 
 /**
+ * Resolve the credential's "Default Calendar" hint into a concrete URL.
+ * The hint can be a full URL, a UUID fragment, or a display-name substring
+ * (case-insensitive). Throws if the hint is empty, unmatched, or ambiguous.
+ */
+export async function resolveDefaultCalendar(
+	this: RequestCtx,
+	serverUrl: string,
+	username: string,
+): Promise<string> {
+	const creds = (await this.getCredentials('calDavApi')) as { defaultCalendar?: string };
+	const hint = (creds.defaultCalendar ?? '').trim();
+	if (!hint) {
+		throw new Error(
+			'No default calendar configured. Open the CalDAV credential and set "Default Calendar", or pick a specific calendar in the node.',
+		);
+	}
+	if (/^https?:\/\//i.test(hint)) {
+		return hint.endsWith('/') ? hint : `${hint}/`;
+	}
+	const calendars = await discoverCalendars.call(this, serverUrl, username);
+	const lower = hint.toLowerCase();
+	const matches = calendars.filter(
+		(c) => c.url.toLowerCase().includes(lower) || c.displayName.toLowerCase().includes(lower),
+	);
+	if (matches.length === 0) {
+		throw new Error(
+			`Default Calendar hint "${hint}" did not match any calendar. Available: ${calendars.map((c) => c.displayName).join(', ')}`,
+		);
+	}
+	if (matches.length > 1) {
+		throw new Error(
+			`Default Calendar hint "${hint}" matched ${matches.length} calendars (${matches.map((c) => c.displayName).join(', ')}). Make the hint more specific (e.g. paste the UUID fragment).`,
+		);
+	}
+	const url = matches[0].url;
+	return url.endsWith('/') ? url : `${url}/`;
+}
+
+/**
+ * Lower-case substring search across summary, description, and location.
+ * Used for client-side text filtering in the Search operation since CalDAV
+ * `text-match` only filters on a single property at a time.
+ */
+export function eventMatchesText(ev: CalDavEvent, query: string): boolean {
+	if (!query) return true;
+	const q = query.toLowerCase();
+	const haystack = [ev.summary, ev.description, ev.location, ev.uid]
+		.filter(Boolean)
+		.map((s) => String(s).toLowerCase())
+		.join('  ');
+	return haystack.includes(q);
+}
+
+/**
+ * Parse a user-supplied comma-separated list of patterns into matchers.
+ * Each entry can be:
+ *   - a literal substring (case-insensitive `includes`) — easy mode, e.g.
+ *     "190b2e38" matches any URL containing that UUID fragment, "Privat"
+ *     matches any name containing "privat".
+ *   - a regex wrapped in slashes, e.g. "/^Team /" or "/holiday/i" — for
+ *     anchored or flag-controlled matches.
+ */
+function parsePatterns(input: string | undefined): Array<(value: string) => boolean> {
+	if (!input || !input.trim()) return [];
+	return input
+		.split(',')
+		.map((p) => p.trim())
+		.filter(Boolean)
+		.map((pattern) => {
+			const re = /^\/(.+)\/([gimsuy]*)$/.exec(pattern);
+			if (re) {
+				try {
+					const r = new RegExp(re[1], re[2]);
+					return (value: string) => r.test(value);
+				} catch {
+					// Fall through to literal match if regex is invalid.
+				}
+			}
+			const lower = pattern.toLowerCase();
+			return (value: string) => value.toLowerCase().includes(lower);
+		});
+}
+
+/**
  * List all calendar collections under calendar-home-set. We filter on
  * resourcetype containing <c:calendar/> so subscribed feeds or principals
- * don't leak into the dropdown.
+ * don't leak into the dropdown. Then apply the user's allow/block lists
+ * from the credential (allow-list first, block-list always wins).
  */
+/**
+ * Per-execution memo for the calendar list.
+ *
+ * n8n hands `execute` one context object for the whole node run, so keying on
+ * it gives exactly "once per execution" and lets the entry be collected when
+ * the run ends. Without this, discovery — a chain of up to six PROPFINDs —
+ * repeated for every input item, and again inside resolveDefaultCalendar.
+ */
+const calendarListCache = new WeakMap<object, Map<string, Promise<CalDavCalendar[]>>>();
+
 export async function discoverCalendars(
+	this: RequestCtx,
+	serverUrl: string,
+	username: string,
+): Promise<CalDavCalendar[]> {
+	let perContext = calendarListCache.get(this);
+	if (!perContext) {
+		perContext = new Map();
+		calendarListCache.set(this, perContext);
+	}
+	const key = `${serverUrl}\n${username}`;
+	const cached = perContext.get(key);
+	if (cached) return cached;
+
+	const pending = discoverCalendarsUncached.call(this, serverUrl, username);
+	perContext.set(key, pending);
+	// A transient failure must not poison the rest of the run.
+	pending.catch(() => perContext.delete(key));
+	return pending;
+}
+
+async function discoverCalendarsUncached(
 	this: RequestCtx,
 	serverUrl: string,
 	username: string,
@@ -255,7 +379,33 @@ export async function discoverCalendars(
 			ctag: prop?.['getctag'],
 		});
 	}
-	return calendars;
+
+	// Apply allow/block filters from the credential.
+	let creds: { calendarAllowList?: string; calendarBlockList?: string } = {};
+	try {
+		creds = (await this.getCredentials('calDavApi')) as typeof creds;
+	} catch {
+		// In rare contexts (tests) credentials may be unavailable; skip filtering.
+	}
+	const allow = parsePatterns(creds.calendarAllowList);
+	const block = parsePatterns(creds.calendarBlockList);
+	const logger = (this as IExecuteFunctions).logger;
+	// Patterns are tested against BOTH displayName and URL, so the user
+	// can target a specific calendar by UUID when names collide.
+	const matchesAny = (matchers: Array<(name: string) => boolean>, c: CalDavCalendar) =>
+		matchers.some((m) => m(c.displayName) || m(c.url));
+	const filtered = calendars.filter((c) => {
+		if (allow.length && !matchesAny(allow, c)) {
+			logger?.debug(`[CalDAV] filter: "${c.displayName}" hidden by allow-list`);
+			return false;
+		}
+		if (block.length && matchesAny(block, c)) {
+			logger?.debug(`[CalDAV] filter: "${c.displayName}" (${c.url}) hidden by block-list`);
+			return false;
+		}
+		return true;
+	});
+	return filtered;
 }
 
 /* ─────────────── iCalendar build/parse helpers ─────────────── */
@@ -274,149 +424,693 @@ export interface BuildEventInput {
 	reminders?: EventReminder[];
 }
 
-function isoToICalDate(iso: string, allDay: boolean, tz?: string): { value: string; params?: Record<string, string> } {
-	const d = new Date(iso);
-	if (Number.isNaN(d.getTime())) {
-		throw new Error(`Invalid ISO 8601 date: ${iso}`);
+const PRODID = '-//Daisytwo//n8n-nodes-caldav-pro//EN';
+
+/**
+ * Cached Intl formatters — constructing one per call is measurably expensive
+ * and we hit this once per DTSTART/DTEND on every event we write.
+ */
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneFormatter(tz: string): Intl.DateTimeFormat {
+	let f = zoneFormatters.get(tz);
+	if (!f) {
+		try {
+			f = new Intl.DateTimeFormat('en-US', {
+				timeZone: tz,
+				hourCycle: 'h23',
+				year: 'numeric',
+				month: '2-digit',
+				day: '2-digit',
+				hour: '2-digit',
+				minute: '2-digit',
+				second: '2-digit',
+			});
+		} catch {
+			throw new Error(
+				`Unknown timezone "${tz}". Use an IANA identifier such as "Europe/Berlin" or "America/New_York".`,
+			);
+		}
+		zoneFormatters.set(tz, f);
 	}
-	if (allDay) {
-		const y = d.getUTCFullYear();
-		const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-		const day = String(d.getUTCDate()).padStart(2, '0');
-		return { value: `${y}${m}${day}`, params: { VALUE: 'DATE' } };
-	}
-	if (tz) {
-		// Floating local time with TZID. Format YYYYMMDDTHHMMSS.
-		const pad = (n: number) => String(n).padStart(2, '0');
-		const value =
-			`${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T` +
-			`${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-		return { value, params: { TZID: tz } };
-	}
-	// UTC (Z suffix)
-	const utc =
-		`${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}T` +
-		`${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}${String(d.getUTCSeconds()).padStart(2, '0')}Z`;
-	return { value: utc };
+	return f;
+}
+
+interface WallClock {
+	year: number;
+	month: number;
+	day: number;
+	hour: number;
+	minute: number;
+	second: number;
 }
 
 /**
- * Build a minimal RFC 5545 VCALENDAR/VEVENT. Done by string assembly rather
- * than ICAL.Component because the latter pulls in a large object graph for
- * a task this small.
+ * The wall-clock reading an observer in `tz` would see at instant `d`.
+ *
+ * This must never use Date's local getters (getHours() etc.): those report the
+ * n8n *host's* timezone, which in Docker is almost always UTC. Emitting those
+ * components under a TZID parameter shifts every event by the host's offset.
  */
-export function buildICalEvent(input: BuildEventInput): string {
-	const esc = (s: string) =>
-		s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
-	const now = new Date();
-	const dtstamp =
-		`${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}T` +
-		`${String(now.getUTCHours()).padStart(2, '0')}${String(now.getUTCMinutes()).padStart(2, '0')}${String(now.getUTCSeconds()).padStart(2, '0')}Z`;
-
-	const start = isoToICalDate(input.start, !!input.allDay, input.timezone);
-	const end = isoToICalDate(input.end, !!input.allDay, input.timezone);
-
-	const lines: string[] = [
-		'BEGIN:VCALENDAR',
-		'VERSION:2.0',
-		'PRODID:-//Daisytwo//n8n-nodes-caldav-pro//EN',
-		'CALSCALE:GREGORIAN',
-		'BEGIN:VEVENT',
-		`UID:${input.uid}`,
-		`DTSTAMP:${dtstamp}`,
-		formatLine('DTSTART', start),
-		formatLine('DTEND', end),
-		`SUMMARY:${esc(input.summary)}`,
-	];
-	if (input.description) lines.push(`DESCRIPTION:${esc(input.description)}`);
-	if (input.location) lines.push(`LOCATION:${esc(input.location)}`);
-	if (input.rrule) lines.push(`RRULE:${input.rrule.replace(/^RRULE:/i, '')}`);
-	if (input.attendees?.length) {
-		for (const a of input.attendees) {
-			const cn = a.name ? `;CN=${esc(a.name)}` : '';
-			lines.push(`ATTENDEE${cn};RSVP=TRUE:mailto:${a.email}`);
-		}
-	}
-	if (input.reminders?.length) {
-		for (const r of input.reminders) {
-			const action = (r.action ?? 'DISPLAY').toUpperCase();
-			const mins = Math.max(0, Math.floor(r.minutesBefore));
-			lines.push('BEGIN:VALARM');
-			lines.push(`ACTION:${action}`);
-			lines.push(`TRIGGER:-PT${mins}M`);
-			lines.push(`DESCRIPTION:${esc(input.summary)}`);
-			lines.push('END:VALARM');
-		}
-	}
-	lines.push('END:VEVENT', 'END:VCALENDAR');
-	return lines.join('\r\n') + '\r\n';
+function wallClockInZone(d: Date, tz: string): WallClock {
+	const parts = zoneFormatter(tz).formatToParts(d);
+	const get = (type: string) => {
+		const p = parts.find((x) => x.type === type);
+		return p ? parseInt(p.value, 10) : 0;
+	};
+	// h23 should never yield 24, but ICU versions have historically disagreed.
+	const hour = get('hour');
+	return {
+		year: get('year'),
+		month: get('month'),
+		day: get('day'),
+		hour: hour === 24 ? 0 : hour,
+		minute: get('minute'),
+		second: get('second'),
+	};
 }
 
-function formatLine(prop: string, v: { value: string; params?: Record<string, string> }): string {
-	if (!v.params) return `${prop}:${v.value}`;
-	const params = Object.entries(v.params)
-		.map(([k, val]) => `;${k}=${val}`)
-		.join('');
-	return `${prop}${params}:${v.value}`;
+function isKnownZone(tz: string): boolean {
+	try {
+		zoneFormatter(tz);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Inverse of wallClockInZone: the instant at which observers in `tz` read the
+ * given wall clock.
+ *
+ * Needed because ical.js can only resolve a TZID parameter when the calendar
+ * object also carries a matching VTIMEZONE. Real clients ship one; events this
+ * node writes do not, so their times come back "floating" and would otherwise
+ * be interpreted in the n8n host's zone.
+ *
+ * Two correction passes: the first lands within an hour or so of the target,
+ * the second settles DST boundaries where the offset differs between the guess
+ * and the real instant.
+ */
+function wallClockToInstant(w: WallClock, tz: string): Date {
+	const target = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
+	let guess = target;
+	for (let pass = 0; pass < 2; pass++) {
+		const shown = wallClockInZone(new Date(guess), tz);
+		const shownAsUtc = Date.UTC(
+			shown.year,
+			shown.month - 1,
+			shown.day,
+			shown.hour,
+			shown.minute,
+			shown.second,
+		);
+		const drift = target - shownAsUtc;
+		if (drift === 0) break;
+		guess += drift;
+	}
+	return new Date(guess);
+}
+
+/**
+ * The absolute instant an ICAL.Time refers to.
+ *
+ * ICAL.Time.toJSDate() is only trustworthy once the zone resolved; for a
+ * floating time it silently reinterprets the wall clock in the host's zone.
+ * `tzid` is the TZID parameter as written on the property, used to recover the
+ * real instant in exactly that case.
+ */
+function instantOf(time: any, tzid?: string): Date {
+	if (time.isDate) {
+		return new Date(Date.UTC(time.year, time.month - 1, time.day));
+	}
+	const zone = time.zone?.tzid;
+	if (zone && zone !== 'floating') return time.toJSDate();
+	if (tzid && isKnownZone(tzid)) {
+		return wallClockToInstant(
+			{
+				year: time.year,
+				month: time.month,
+				day: time.day,
+				hour: time.hour,
+				minute: time.minute,
+				second: time.second,
+			},
+			tzid,
+		);
+	}
+	// Genuinely floating, or a TZID we can't map (e.g. an Outlook-style
+	// "W. Europe Standard Time" with no VTIMEZONE). Host-local is the best
+	// remaining reading.
+	return time.toJSDate();
+}
+
+/**
+ * Render a time for output: a bare calendar date for all-day events, and an
+ * unambiguous UTC instant otherwise.
+ *
+ * Previously this emitted ICAL.Time.toString(), which for a TZID event yields
+ * "2026-04-20T14:00:00" with no offset — re-parsing that downstream applied the
+ * host's zone and silently moved the event.
+ */
+function formatEventTime(time: any, tzid?: string): string {
+	if (time.isDate) {
+		const pad = (n: number) => String(n).padStart(2, '0');
+		return `${time.year}-${pad(time.month)}-${pad(time.day)}`;
+	}
+	return instantOf(time, tzid).toISOString();
+}
+
+function parseInstant(iso: string, field: string): Date {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) {
+		throw new Error(
+			`Invalid ISO 8601 date in "${field}": ${iso}. Expected something like "2026-04-20T14:00:00+02:00".`,
+		);
+	}
+	return d;
+}
+
+/**
+ * The calendar date literally written in an ISO string, ignoring any offset.
+ *
+ * For all-day events this is what the user means: "2026-04-20T00:00:00+02:00"
+ * with All Day ticked is the 20th, even though that instant is the 19th in UTC.
+ * Returns null for inputs that aren't shaped like a date (epoch millis, etc.),
+ * so callers can fall back to a zone-based reading.
+ */
+function literalDate(iso: string): { year: number; month: number; day: number } | null {
+	const m = /^\s*(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+	if (!m) return null;
+	return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+}
+
+function allDayTime(iso: string, field: string, tz?: string): any {
+	const literal = literalDate(iso);
+	const parts = literal ?? wallClockInZone(parseInstant(iso, field), tz ?? 'UTC');
+	return ICAL.Time.fromData({
+		year: parts.year,
+		month: parts.month,
+		day: parts.day,
+		isDate: true,
+	});
+}
+
+function timedTime(iso: string, field: string, tz?: string): any {
+	const d = parseInstant(iso, field);
+	if (tz) {
+		const w = wallClockInZone(d, tz);
+		return ICAL.Time.fromData({ ...w, isDate: false });
+	}
+	return ICAL.Time.fromData(
+		{
+			year: d.getUTCFullYear(),
+			month: d.getUTCMonth() + 1,
+			day: d.getUTCDate(),
+			hour: d.getUTCHours(),
+			minute: d.getUTCMinutes(),
+			second: d.getUTCSeconds(),
+			isDate: false,
+		},
+		ICAL.Timezone.utcTimezone,
+	);
+}
+
+function setDateProperty(vevent: any, name: string, value: any, tz?: string, allDay?: boolean) {
+	vevent.removeAllProperties(name);
+	const prop = new ICAL.Property(name, vevent);
+	if (allDay) prop.resetType('date');
+	prop.setValue(value);
+	if (!allDay && tz) prop.setParameter('tzid', tz);
+	vevent.addProperty(prop);
+}
+
+/**
+ * Write DTSTART/DTEND as a consistent pair.
+ *
+ * All-day events use VALUE=DATE, where RFC 5545 defines DTEND as *exclusive*.
+ * Users (and LLMs) overwhelmingly supply an inclusive end — "20th to the 20th"
+ * for a one-day event, or an end of 23:59 on the same day — which would encode
+ * a zero-length event. We bump any end that lands on or before the start by one
+ * day so the common case means what it looks like; genuinely multi-day ranges
+ * already written exclusively are left alone.
+ */
+function applyDateRange(vevent: any, start: string, end: string, allDay: boolean, tz?: string) {
+	if (allDay) {
+		const s = allDayTime(start, 'Start', tz);
+		const e = allDayTime(end, 'End', tz);
+		if (e.compare(s) <= 0) {
+			e.adjust(1, 0, 0, 0);
+		}
+		setDateProperty(vevent, 'dtstart', s, undefined, true);
+		setDateProperty(vevent, 'dtend', e, undefined, true);
+		return;
+	}
+	setDateProperty(vevent, 'dtstart', timedTime(start, 'Start', tz), tz, false);
+	setDateProperty(vevent, 'dtend', timedTime(end, 'End', tz), tz, false);
+}
+
+function utcNow(): any {
+	const d = new Date();
+	return ICAL.Time.fromData(
+		{
+			year: d.getUTCFullYear(),
+			month: d.getUTCMonth() + 1,
+			day: d.getUTCDate(),
+			hour: d.getUTCHours(),
+			minute: d.getUTCMinutes(),
+			second: d.getUTCSeconds(),
+			isDate: false,
+		},
+		ICAL.Timezone.utcTimezone,
+	);
+}
+
+function setAttendees(vevent: any, attendees: Array<{ email: string; name?: string }>) {
+	vevent.removeAllProperties('attendee');
+	for (const a of attendees) {
+		if (!a?.email) continue;
+		const prop = new ICAL.Property('attendee', vevent);
+		prop.setValue(`mailto:${a.email}`);
+		if (a.name) prop.setParameter('cn', a.name);
+		prop.setParameter('rsvp', 'TRUE');
+		vevent.addProperty(prop);
+	}
+}
+
+function setReminders(vevent: any, reminders: EventReminder[], description: string) {
+	for (const existing of vevent.getAllSubcomponents('valarm')) {
+		vevent.removeSubcomponent(existing);
+	}
+	for (const r of reminders) {
+		const alarm = new ICAL.Component('valarm');
+		alarm.addPropertyWithValue('action', (r.action ?? 'DISPLAY').toUpperCase());
+		const mins = Math.max(0, Math.floor(r.minutesBefore));
+		alarm.addPropertyWithValue('trigger', ICAL.Duration.fromSeconds(-mins * 60));
+		alarm.addPropertyWithValue('description', description || 'Reminder');
+		vevent.addSubcomponent(alarm);
+	}
+}
+
+/**
+ * Set a text property, or remove it when the caller passes an empty string.
+ * That gives Update an explicit way to clear a field, distinct from "leave
+ * untouched" (which is signalled by passing undefined and never reaching here).
+ */
+function setOrClear(vevent: any, name: string, value: string) {
+	if (value === '') {
+		vevent.removeAllProperties(name);
+		return;
+	}
+	vevent.updatePropertyWithValue(name, value);
+}
+
+/**
+ * Build a complete RFC 5545 VCALENDAR/VEVENT.
+ *
+ * Serialisation goes through ical.js rather than string concatenation so that
+ * line folding, text escaping, and parameter quoting follow the spec instead of
+ * a hand-rolled approximation.
+ */
+export function buildICalEvent(input: BuildEventInput): string {
+	const vcal = new ICAL.Component('vcalendar');
+	vcal.addPropertyWithValue('version', '2.0');
+	vcal.addPropertyWithValue('prodid', PRODID);
+	vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+
+	const vevent = new ICAL.Component('vevent');
+	vcal.addSubcomponent(vevent);
+
+	vevent.addPropertyWithValue('uid', input.uid);
+	const stamp = new ICAL.Property('dtstamp', vevent);
+	stamp.setValue(utcNow());
+	vevent.addProperty(stamp);
+
+	applyDateRange(vevent, input.start, input.end, !!input.allDay, input.timezone);
+	vevent.addPropertyWithValue('summary', input.summary);
+
+	if (input.description) vevent.addPropertyWithValue('description', input.description);
+	if (input.location) vevent.addPropertyWithValue('location', input.location);
+	if (input.rrule) {
+		vevent.addPropertyWithValue('rrule', ICAL.Recur.fromString(input.rrule.replace(/^RRULE:/i, '')));
+	}
+	if (input.attendees?.length) setAttendees(vevent, input.attendees);
+	if (input.reminders?.length) setReminders(vevent, input.reminders, input.summary);
+
+	return `${vcal.toString()}\r\n`;
+}
+
+/**
+ * Fields an Update may change. Every key is optional and carries three states:
+ *   - absent (undefined) → leave whatever the server already has
+ *   - empty string / empty array → clear the property
+ *   - a value → overwrite
+ * That distinction is what keeps Update from silently wiping fields the caller
+ * simply didn't mention.
+ */
+export interface PatchEventInput {
+	summary?: string;
+	start?: string;
+	end?: string;
+	description?: string;
+	location?: string;
+	allDay?: boolean;
+	timezone?: string;
+	rrule?: string;
+	attendees?: Array<{ email: string; name?: string }>;
+	reminders?: EventReminder[];
+}
+
+/**
+ * Apply a partial update to an existing VEVENT, preserving everything the
+ * patch doesn't mention — including properties this node doesn't model at all
+ * (CATEGORIES, ORGANIZER, ATTACH, STATUS, custom X- properties).
+ *
+ * Rebuilding the event from scratch, as an earlier version did, dropped all of
+ * those plus any field the caller left blank.
+ */
+export function patchICalEvent(raw: string, patch: PatchEventInput): string {
+	const comp = new ICAL.Component(ICAL.parse(raw));
+	const vevent = comp.getFirstSubcomponent('vevent');
+	if (!vevent) {
+		throw new Error('The stored calendar resource contains no VEVENT — refusing to overwrite it.');
+	}
+
+	if (patch.start !== undefined || patch.end !== undefined) {
+		if (patch.start === undefined || patch.end === undefined) {
+			throw new Error('Start and End must be updated together.');
+		}
+		const dtstart = vevent.getFirstProperty('dtstart');
+		// Fall back to how the event is currently stored, so updating only the
+		// time of an all-day event doesn't silently convert it to a timed one,
+		// and an event's existing TZID survives an update that omits Timezone.
+		const existingAllDay = dtstart?.type === 'date';
+		const existingTz = dtstart?.getParameter('tzid') as string | undefined;
+		const allDay = patch.allDay ?? existingAllDay;
+		const tz = patch.timezone ?? existingTz;
+		applyDateRange(vevent, patch.start, patch.end, allDay, tz);
+	}
+
+	if (patch.summary !== undefined) setOrClear(vevent, 'summary', patch.summary);
+	if (patch.description !== undefined) setOrClear(vevent, 'description', patch.description);
+	if (patch.location !== undefined) setOrClear(vevent, 'location', patch.location);
+	if (patch.rrule !== undefined) {
+		const value = patch.rrule.replace(/^RRULE:/i, '');
+		if (value === '') {
+			vevent.removeAllProperties('rrule');
+		} else {
+			vevent.updatePropertyWithValue('rrule', ICAL.Recur.fromString(value));
+		}
+	}
+	if (patch.attendees !== undefined) setAttendees(vevent, patch.attendees);
+	if (patch.reminders !== undefined) {
+		const label =
+			patch.summary ?? (vevent.getFirstPropertyValue('summary') as string | null) ?? 'Reminder';
+		setReminders(vevent, patch.reminders, String(label));
+	}
+
+	// RFC 5545: SEQUENCE must increase on every change that attendees should
+	// see, otherwise clients may treat the update as a stale duplicate.
+	const seq = Number(vevent.getFirstPropertyValue('sequence') ?? 0);
+	vevent.updatePropertyWithValue('sequence', (Number.isFinite(seq) ? seq : 0) + 1);
+
+	for (const name of ['dtstamp', 'last-modified']) {
+		vevent.removeAllProperties(name);
+		const prop = new ICAL.Property(name, vevent);
+		prop.setValue(utcNow());
+		vevent.addProperty(prop);
+	}
+
+	return `${comp.toString()}\r\n`;
+}
+
+function readAttendees(vevent: any): string[] {
+	return vevent
+		.getAllProperties('attendee')
+		.map((p: any) => {
+			const val = p.getFirstValue();
+			return typeof val === 'string' ? val.replace(/^mailto:/i, '') : '';
+		})
+		.filter(Boolean);
+}
+
+function readReminders(vevent: any): Array<{ minutesBefore: number; action: string }> {
+	const reminders: Array<{ minutesBefore: number; action: string }> = [];
+	for (const valarm of vevent.getAllSubcomponents('valarm')) {
+		const action = (valarm.getFirstPropertyValue('action') as string | null) ?? 'DISPLAY';
+		const trigger = valarm.getFirstProperty('trigger');
+		if (!trigger) continue;
+		const tv = trigger.getFirstValue();
+		// ICAL.Duration: negative durations are "before start". Convert to minutes.
+		let minutes = 0;
+		if (tv && typeof tv === 'object' && 'toSeconds' in tv) {
+			const seconds = (tv as any).toSeconds();
+			minutes = Math.round(Math.abs(seconds) / 60);
+		} else if (typeof tv === 'string') {
+			const match = /([-+]?)P?T?(\d+)([HMD])/i.exec(tv);
+			if (match) {
+				const n = parseInt(match[2], 10);
+				minutes =
+					match[3].toUpperCase() === 'H' ? n * 60 : match[3].toUpperCase() === 'D' ? n * 1440 : n;
+			}
+		}
+		reminders.push({ minutesBefore: minutes, action: String(action) });
+	}
+	return reminders;
+}
+
+/** The TZID written on a component's DTSTART, if any. */
+function startTzid(vevent: any): string | undefined {
+	return vevent.getFirstProperty('dtstart')?.getParameter('tzid') as string | undefined;
+}
+
+/**
+ * Assemble one output record. `times` overrides the component's own DTSTART /
+ * DTEND, which is how a single occurrence of a series reports its own slot
+ * while still carrying the series' details.
+ */
+function toCalDavEvent(
+	vevent: any,
+	url: string,
+	etag: string | undefined,
+	raw: string,
+	times?: { start: any; end: any; recurrenceId?: any; tzid?: string },
+): CalDavEvent {
+	const event = new ICAL.Event(vevent);
+	const tzid = times?.tzid ?? startTzid(vevent);
+	const start = times?.start ?? event.startDate;
+	const end = times?.end ?? event.endDate;
+	const rruleProp = vevent.getFirstProperty('rrule');
+	const reminders = readReminders(vevent);
+	return {
+		uid: event.uid,
+		url,
+		etag,
+		summary: event.summary ?? undefined,
+		description: event.description ?? undefined,
+		location: event.location ?? undefined,
+		start: start ? formatEventTime(start, tzid) : undefined,
+		end: end ? formatEventTime(end, tzid) : undefined,
+		allDay: start?.isDate ?? false,
+		timezone: tzid,
+		rrule: rruleProp ? rruleProp.getFirstValue()?.toString() : undefined,
+		recurrenceId: times?.recurrenceId ? formatEventTime(times.recurrenceId, tzid) : undefined,
+		attendees: readAttendees(vevent),
+		reminders: reminders.length ? reminders : undefined,
+		raw,
+	};
 }
 
 /**
  * Parse a raw iCalendar VCALENDAR into a normalised event. Uses ical.js for
  * robust handling of folded lines, TZID, and RRULE.
+ *
+ * Returns the series master for a recurring event; use expandCalendarObject
+ * when you want the individual occurrences.
  */
 export function parseICalEvent(raw: string, url: string, etag?: string): CalDavEvent | null {
 	try {
-		const jcal = ICAL.parse(raw);
-		const comp = new ICAL.Component(jcal);
-		const vevent = comp.getFirstSubcomponent('vevent');
-		if (!vevent) return null;
-		const event = new ICAL.Event(vevent);
-		const attendees = vevent
-			.getAllProperties('attendee')
-			.map((p: any) => {
-				const val = p.getFirstValue();
-				return typeof val === 'string' ? val.replace(/^mailto:/i, '') : '';
-			})
-			.filter(Boolean);
-		const rruleProp = vevent.getFirstProperty('rrule');
-		const reminders: Array<{ minutesBefore: number; action: string }> = [];
-		for (const valarm of vevent.getAllSubcomponents('valarm')) {
-			const action = (valarm.getFirstPropertyValue('action') as string | null) ?? 'DISPLAY';
-			const trigger = valarm.getFirstProperty('trigger');
-			if (!trigger) continue;
-			const tv = trigger.getFirstValue();
-			// ICAL.Duration: negative durations are "before start". Convert to minutes.
-			let minutes = 0;
-			if (tv && typeof tv === 'object' && 'toSeconds' in tv) {
-				const seconds = (tv as any).toSeconds();
-				minutes = Math.round(Math.abs(seconds) / 60);
-			} else if (typeof tv === 'string') {
-				const match = /([-+]?)P?T?(\d+)([HMD])/i.exec(tv);
-				if (match) {
-					const n = parseInt(match[2], 10);
-					minutes = match[3].toUpperCase() === 'H' ? n * 60 : match[3].toUpperCase() === 'D' ? n * 1440 : n;
-				}
-			}
-			reminders.push({ minutesBefore: minutes, action: String(action) });
-		}
-		return {
-			uid: event.uid,
-			url,
-			etag,
-			summary: event.summary ?? undefined,
-			description: event.description ?? undefined,
-			location: event.location ?? undefined,
-			start: event.startDate?.toString(),
-			end: event.endDate?.toString(),
-			allDay: event.startDate?.isDate ?? false,
-			rrule: rruleProp ? rruleProp.getFirstValue()?.toString() : undefined,
-			attendees,
-			reminders: reminders.length ? reminders : undefined,
-			raw,
-		};
+		const comp = new ICAL.Component(ICAL.parse(raw));
+		const vevents = comp.getAllSubcomponents('vevent');
+		if (!vevents.length) return null;
+		// Prefer the master. Taking the first component blindly would return an
+		// overridden instance when the server happens to serialise it first.
+		const master = vevents.find((v: any) => !v.hasProperty('recurrence-id')) ?? vevents[0];
+		return toCalDavEvent(master, url, etag, raw);
 	} catch {
 		return null;
 	}
+}
+
+// Guard rails for pathological series (an RRULE with no UNTIL/COUNT over a wide
+// window, or a corrupt rule that fails to advance).
+const MAX_OCCURRENCES_PER_OBJECT = 1000;
+const MAX_ITERATIONS_PER_OBJECT = 20000;
+
+/**
+ * Turn one calendar object into the event records that fall inside a window,
+ * expanding recurrence rules into individual occurrences.
+ *
+ * A time-range REPORT returns the whole object — the master VEVENT plus any
+ * RECURRENCE-ID overrides — not the matching occurrences. Reading only the
+ * master, as this node did before, reported a weekly series at its original
+ * 2020 start date and made "Get Next" skip it entirely.
+ *
+ * Without a range, recurrence is left alone and the master is returned as-is.
+ */
+export function expandCalendarObject(
+	raw: string,
+	url: string,
+	etag?: string,
+	rangeStart?: Date,
+	rangeEnd?: Date,
+): CalDavEvent[] {
+	try {
+		const comp = new ICAL.Component(ICAL.parse(raw));
+		const vevents = comp.getAllSubcomponents('vevent');
+		if (!vevents.length) return [];
+
+		const masters = vevents.filter((v: any) => !v.hasProperty('recurrence-id'));
+		const overrides = vevents.filter((v: any) => v.hasProperty('recurrence-id'));
+
+		// An object can arrive holding only overrides when the server trims the
+		// series to what matched. Report them as standalone events.
+		if (!masters.length) {
+			return overrides.map((v: any) => toCalDavEvent(v, url, etag, raw));
+		}
+
+		const out: CalDavEvent[] = [];
+		for (const master of masters) {
+			const event = new ICAL.Event(master);
+			if (!rangeStart || !rangeEnd || !event.isRecurring()) {
+				out.push(toCalDavEvent(master, url, etag, raw));
+				continue;
+			}
+			for (const o of overrides) {
+				if ((o.getFirstPropertyValue('uid') as string) === event.uid) {
+					event.relateException(new ICAL.Event(o));
+				}
+			}
+
+			const tzid = startTzid(master);
+			const iterator = event.iterator();
+			let next: any;
+			let iterations = 0;
+			let collected = 0;
+			while ((next = iterator.next())) {
+				if (++iterations > MAX_ITERATIONS_PER_OBJECT) break;
+				// EXDATE and overrides are applied by getOccurrenceDetails, so the
+				// details — not the raw iterator time — decide the real slot.
+				const details = event.getOccurrenceDetails(next);
+				const startsAt = instantOf(details.startDate, tzid);
+				if (startsAt.getTime() >= rangeEnd.getTime()) break;
+				const endsAt = instantOf(details.endDate, tzid);
+				// Keep occurrences that overlap the window, matching how the server
+				// selected the object in the first place.
+				if (endsAt.getTime() <= rangeStart.getTime()) continue;
+				out.push(
+					toCalDavEvent(details.item.component, url, etag, raw, {
+						start: details.startDate,
+						end: details.endDate,
+						recurrenceId: details.recurrenceId,
+						tzid,
+					}),
+				);
+				if (++collected >= MAX_OCCURRENCES_PER_OBJECT) break;
+			}
+		}
+		return out;
+	} catch {
+		return [];
+	}
+}
+
+function escapeXml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;');
+}
+
+/**
+ * A calendar-query that asks only which resource holds a given UID. No
+ * calendar-data is requested — we want the href, not the event.
+ */
+export function buildUidQueryReport(uid: string): string {
+	return `<?xml version="1.0" encoding="utf-8"?>
+<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:getetag/>
+  </d:prop>
+  <c:filter>
+    <c:comp-filter name="VCALENDAR">
+      <c:comp-filter name="VEVENT">
+        <c:prop-filter name="UID">
+          <c:text-match collation="i;octet">${escapeXml(uid)}</c:text-match>
+        </c:prop-filter>
+      </c:comp-filter>
+    </c:comp-filter>
+  </c:filter>
+</c:calendar-query>`;
+}
+
+/**
+ * Find the resource URL of a single event.
+ *
+ * A UID is not a filename. Only events this node created live at
+ * <calendar>/<uid>.ics — anything added from a calendar app is stored under a
+ * name the server chose, so addressing it by UID used to 404.
+ *
+ * Order of preference:
+ *   1. an explicit URL, as returned in the "url" field of every read operation
+ *   2. a UID lookup via calendar-query
+ *   3. the historical <uid>.ics convention, so servers that reject the query
+ *      still work for events this node wrote
+ */
+export async function resolveEventUrl(
+	this: RequestCtx,
+	calendarUrl: string,
+	uid: string,
+	explicitUrl?: string,
+	serverUrl?: string,
+): Promise<string> {
+	const explicit = (explicitUrl ?? '').trim();
+	if (explicit) return absoluteUrl(explicit, serverUrl || calendarUrl);
+
+	const logger = (this as IExecuteFunctions).logger;
+	if (uid) {
+		try {
+			const resp = await davRequest.call(this, 'REPORT', calendarUrl, buildUidQueryReport(uid), {
+				Depth: '1',
+				'Content-Type': 'application/xml; charset=utf-8',
+			});
+			const hrefs = extractResponses(resp.body)
+				.map((r) => r.href)
+				.filter(Boolean)
+				.map(String);
+			if (hrefs.length > 1) {
+				logger?.debug(`[CalDAV] UID ${uid} matched ${hrefs.length} resources; using the first`);
+			}
+			if (hrefs.length) return absoluteUrl(hrefs[0], serverUrl || calendarUrl);
+			logger?.debug(`[CalDAV] UID ${uid} not found by query; falling back to <uid>.ics`);
+		} catch (e) {
+			logger?.debug(`[CalDAV] UID lookup failed (${(e as Error).message}); falling back`);
+		}
+	}
+	return `${calendarUrl}${encodeURIComponent(uid)}.ics`;
+}
+
+/**
+ * Drop the verbose `raw` payload. A recurring series repeats the same full
+ * VCALENDAR on every expanded occurrence, which is pure noise for most
+ * workflows and burns context when the node is used as an AI Agent tool.
+ */
+export function simplifyEvent(event: CalDavEvent): Omit<CalDavEvent, 'raw'> {
+	const copy = { ...event };
+	delete copy.raw;
+	return copy;
 }
 
 /**
@@ -449,11 +1143,16 @@ export function buildTimeRangeReport(timeMin: string, timeMax: string): string {
 
 /**
  * Parse a multistatus REPORT response into CalDavEvent records.
+ *
+ * Pass the queried window as rangeStart/rangeEnd to have recurring series
+ * expanded into their individual occurrences; omit it to get series masters.
  */
 export function parseCalendarQueryResponse(
 	xml: string,
 	calendarUrl: string,
 	serverUrl: string,
+	rangeStart?: Date,
+	rangeEnd?: Date,
 ): CalDavEvent[] {
 	const responses = extractResponses(xml);
 	const events: CalDavEvent[] = [];
@@ -468,8 +1167,7 @@ export function parseCalendarQueryResponse(
 		if (!raw) continue;
 		const etag = (prop.getetag ?? '').toString().replace(/"/g, '');
 		const url = absoluteUrl(href, serverUrl || calendarUrl);
-		const parsed = parseICalEvent(raw, url, etag || undefined);
-		if (parsed) events.push(parsed);
+		events.push(...expandCalendarObject(raw, url, etag || undefined, rangeStart, rangeEnd));
 	}
 	return events;
 }

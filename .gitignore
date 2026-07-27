@@ -4,3 +4,8 @@ dist/
 .DS_Store
 .env
 *.tsbuildinfo
+
+# Local test scripts — exercise the live CalDAV server with real credentials
+# (read from env vars). Useful during development but not for the public repo.
+e2e-test.js
+smoke-test.js

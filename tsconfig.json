@@ -16,6 +16,9 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "incremental": true,
+    // Keep the build cache out of dist/ — package.json "files" ships that
+    // directory wholesale, and .npmignore does not apply inside it.
+    "tsBuildInfoFile": "./node_modules/.cache/caldav-pro.tsbuildinfo",
     "declaration": true,
     "sourceMap": true,
     "skipLibCheck": true,

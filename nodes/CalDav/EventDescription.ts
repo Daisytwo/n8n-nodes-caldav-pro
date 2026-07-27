@@ -21,13 +21,13 @@ export const eventOperations: INodeProperties[] = [
 			{
 				name: 'Delete',
 				value: 'delete',
-				description: 'Delete a calendar event by its UID',
+				description: 'Delete a calendar event by its UID or URL',
 				action: 'Delete an event',
 			},
 			{
 				name: 'Get',
 				value: 'get',
-				description: 'Get a single calendar event by its UID',
+				description: 'Get a single calendar event by its UID or URL',
 				action: 'Get an event',
 			},
 			{
@@ -35,6 +35,24 @@ export const eventOperations: INodeProperties[] = [
 				value: 'getAll',
 				description: 'Get many events from a calendar within a time window',
 				action: 'Get many events',
+			},
+			{
+				name: 'Get Next',
+				value: 'getNext',
+				description: 'Get the next upcoming event(s) starting from now',
+				action: 'Get the next event',
+			},
+			{
+				name: 'Move',
+				value: 'move',
+				description: 'Move an event to a different calendar (keeps the same UID)',
+				action: 'Move an event',
+			},
+			{
+				name: 'Search',
+				value: 'search',
+				description: 'Search events by keyword in title, description, or location',
+				action: 'Search events',
 			},
 			{
 				name: 'Update',
@@ -56,7 +74,7 @@ const calendarParameter: INodeProperties = {
 	},
 	required: true,
 	default: '',
-	description: 'The CalDAV calendar to operate on. Pick from the dropdown — the values are the full calendar URLs discovered from the server. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code-examples/expressions/">expression</a>. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	description: 'The CalDAV calendar to operate on. Three options: (1) pick a specific calendar from the dropdown; (2) pick "🏠 Default Calendar (From Credentials)" to use the calendar configured in the CalDAV credential — works for any operation; (3) pick "⭐ All Calendars (Search Across)" to query every visible calendar at once — only valid for Get Many / Get Next / Search. For Move, this is the SOURCE calendar. The values are full calendar URLs. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 	displayOptions: {
 		show: {
 			resource: ['event'],
@@ -73,14 +91,76 @@ export const eventFields: INodeProperties[] = [
 		displayName: 'Event UID',
 		name: 'uid',
 		type: 'string',
-		required: true,
 		default: '',
 		description:
-			'The unique identifier of the event (the value of the iCalendar "UID" property). Returned by the Create operation as "uid".',
+			'The unique identifier of the event (the value of the iCalendar "UID" property). Returned by the Create operation as "uid". The event is located by querying the calendar for this UID. Either this or Event URL is required; Event URL is faster and more reliable when you have it.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
-				operation: ['get', 'delete', 'update'],
+				operation: ['delete', 'get', 'move', 'update'],
+			},
+		},
+	},
+	{
+		displayName: 'Event URL',
+		name: 'eventUrl',
+		type: 'string',
+		default: '',
+		placeholder: 'https://sync.example.com/calendars/user/uuid/abc123.ics',
+		description: 'The exact URL of the event resource, as returned in the "URL" field by Get / Get Many / Get Next / Search. Prefer this when chaining from a read operation: it addresses the event directly and skips the UID lookup. Takes precedence over Event UID when both are given.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['delete', 'get', 'move', 'update'],
+			},
+		},
+	},
+	{
+		displayName: 'Target Calendar Name or ID',
+		name: 'targetCalendar',
+		type: 'options',
+		typeOptions: {
+			loadOptionsMethod: 'getCalendars',
+		},
+		required: true,
+		default: '',
+		description:
+			'The destination calendar to move the event into. Pick a specific calendar — "All Calendars" is not valid here. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['move'],
+			},
+		},
+	},
+	{
+		displayName: 'Query',
+		name: 'query',
+		type: 'string',
+		required: true,
+		default: '',
+		placeholder: 'Alice',
+		description:
+			'Text to search for. Matched case-insensitively against the event title (SUMMARY), description, location, and UID. Examples: "Alice" finds every event mentioning Alice; "Zahnarzt" finds dentist appointments.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['search'],
+			},
+		},
+	},
+	{
+		displayName: 'Lookahead Days',
+		name: 'lookaheadDays',
+		type: 'number',
+		typeOptions: { minValue: 1 },
+		default: 30,
+		description:
+			'How far into the future to look for the next event(s). 7 = next week, 30 = next month, 365 = next year. The window starts at the current time.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['getNext'],
 			},
 		},
 	},
@@ -123,7 +203,7 @@ export const eventFields: INodeProperties[] = [
 		required: true,
 		default: "={{ $now.plus(1, 'hour') }}",
 		description:
-			'Event end time in ISO 8601 format with timezone offset, e.g. "2026-04-20T15:00:00+02:00". Must be after Start.',
+			'Event end time in ISO 8601 format with timezone offset, e.g. "2026-04-20T15:00:00+02:00". Must be after Start. For all-day events you can give the last day inclusively (same day as Start for a one-day event) — it is converted to the exclusive end iCalendar requires.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
@@ -137,6 +217,8 @@ export const eventFields: INodeProperties[] = [
 		type: 'collection',
 		placeholder: 'Add Field',
 		default: {},
+		description:
+			'On Update these are applied as a patch: any field you do not add here keeps its current value on the server, and adding a field but leaving it empty clears it. You therefore do not need to restate the whole event to change one detail.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
@@ -150,7 +232,7 @@ export const eventFields: INodeProperties[] = [
 				type: 'boolean',
 				default: false,
 				description:
-					'Whether the event spans full days (no time component). If true, Start/End are interpreted as dates only.',
+					'Whether the event spans full days (no time component). If true, only the calendar date part of Start/End is used and the time and timezone are ignored. A one-day event needs Start and End on the same day. On Update, omit this field to keep the event as it is stored.',
 			},
 			{
 				displayName: 'Attendees',
@@ -158,7 +240,8 @@ export const eventFields: INodeProperties[] = [
 				type: 'fixedCollection',
 				typeOptions: { multipleValues: true },
 				default: {},
-				description: 'List of attendee email addresses to invite to the event',
+				description:
+					'List of attendee email addresses to invite to the event. On Update this replaces the existing attendee list in full, so include everyone who should remain.',
 				placeholder: 'Add Attendee',
 				options: [
 					{
@@ -208,7 +291,7 @@ export const eventFields: INodeProperties[] = [
 				default: {},
 				placeholder: 'Add Reminder',
 				description:
-					'Alarms that notify attendees before the event starts. Multiple reminders are allowed (e.g. 1 day + 15 minutes before).',
+					'Alarms that notify attendees before the event starts. Multiple reminders are allowed (e.g. 1 day + 15 minutes before). On Update this replaces the existing alarms in full.',
 				options: [
 					{
 						name: 'reminder',
@@ -270,6 +353,20 @@ export const eventFields: INodeProperties[] = [
 
 	// ─────────── Event: Get All filters ───────────
 	{
+		displayName: 'Simplify',
+		name: 'simplify',
+		type: 'boolean',
+		default: true,
+		description:
+			'Whether to return a simplified version of the response. When enabled the full iCalendar source ("raw") is omitted, which keeps the output readable and — for a recurring series, where every occurrence repeats the same source — much smaller. Turn this off if you need the original VCALENDAR text.',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['get', 'getAll', 'getNext', 'search'],
+			},
+		},
+	},
+	{
 		displayName: 'Return All',
 		name: 'returnAll',
 		type: 'boolean',
@@ -278,7 +375,7 @@ export const eventFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['event'],
-				operation: ['getAll'],
+				operation: ['getAll', 'getNext', 'search'],
 			},
 		},
 	},
@@ -292,7 +389,7 @@ export const eventFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['event'],
-				operation: ['getAll'],
+				operation: ['getAll', 'getNext', 'search'],
 				returnAll: [false],
 			},
 		},
@@ -308,7 +405,7 @@ export const eventFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['event'],
-				operation: ['getAll'],
+				operation: ['getAll', 'search'],
 			},
 		},
 	},
@@ -323,7 +420,7 @@ export const eventFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['event'],
-				operation: ['getAll'],
+				operation: ['getAll', 'search'],
 			},
 		},
 	},

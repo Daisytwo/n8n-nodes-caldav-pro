@@ -15,12 +15,132 @@ import {
 	davRequest,
 	discoverCalendars,
 	buildICalEvent,
+	patchICalEvent,
 	buildTimeRangeReport,
 	parseCalendarQueryResponse,
 	parseICalEvent,
+	resolveDefaultCalendar,
+	resolveEventUrl,
+	simplifyEvent,
+	eventMatchesText,
+	type CalDavEvent,
 } from './GenericFunctions';
 import { calendarOperations, calendarFields } from './CalendarDescription';
 import { eventOperations, eventFields } from './EventDescription';
+
+/**
+ * Work out which resource an operation should act on, from whichever of
+ * Event URL / Event UID the caller supplied.
+ */
+async function locateEvent(
+	this: IExecuteFunctions,
+	itemIndex: number,
+	calendarUrl: string,
+	serverUrl: string,
+): Promise<{ uid: string; eventUrl: string }> {
+	const uid = (this.getNodeParameter('uid', itemIndex, '') as string).trim();
+	const explicitUrl = (this.getNodeParameter('eventUrl', itemIndex, '') as string).trim();
+	if (!uid && !explicitUrl) {
+		throw new NodeOperationError(
+			this.getNode(),
+			'Either Event UID or Event URL is required to identify the event.',
+			{
+				itemIndex,
+				description:
+					'Read operations return both — pass the "url" field through for the most reliable result.',
+			},
+		);
+	}
+	const eventUrl = await resolveEventUrl.call(this, calendarUrl, uid, explicitUrl, serverUrl);
+	return { uid, eventUrl };
+}
+
+/**
+ * Read one end of a time window, rejecting garbage with a message that names
+ * the field. Without this an unparseable date reaches the REPORT body as
+ * "NaNNaNNaN" and comes back as an opaque 400 from the server.
+ */
+function readWindowBound(
+	this: IExecuteFunctions,
+	itemIndex: number,
+	parameter: string,
+	label: string,
+): Date {
+	const raw = this.getNodeParameter(parameter, itemIndex) as string;
+	const parsed = new Date(raw);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new NodeOperationError(this.getNode(), `${label} is not a valid date: "${raw}"`, {
+			itemIndex,
+			description: 'Expected ISO 8601, for example "2026-04-20T00:00:00+02:00".',
+		});
+	}
+	return parsed;
+}
+
+/**
+ * Run a time-range REPORT across one or every calendar and return the matching
+ * events, sorted by start.
+ *
+ * Shared by Get Many, Get Next, and Search — they differ only in the window and
+ * the `accept` predicate.
+ */
+async function collectEvents(
+	this: IExecuteFunctions,
+	opts: {
+		calendarUrl: string;
+		serverUrl: string;
+		username: string;
+		rangeStart: Date;
+		rangeEnd: Date;
+		simplify: boolean;
+		accept?: (event: CalDavEvent) => boolean;
+	},
+): Promise<IDataObject[]> {
+	const { calendarUrl, serverUrl, username, rangeStart, rangeEnd, simplify, accept } = opts;
+
+	// Either the picked calendar, or every visible one for "All Calendars".
+	const targets =
+		calendarUrl === '__ALL__'
+			? (await discoverCalendars.call(this, serverUrl, username)).map((c) => ({
+					url: c.url.endsWith('/') ? c.url : `${c.url}/`,
+					displayName: c.displayName,
+				}))
+			: [{ url: calendarUrl, displayName: '' }];
+
+	const body = buildTimeRangeReport(rangeStart.toISOString(), rangeEnd.toISOString());
+	const collected: IDataObject[] = [];
+	for (const target of targets) {
+		try {
+			const resp = await davRequest.call(this, 'REPORT', target.url, body, {
+				Depth: '1',
+				'Content-Type': 'application/xml; charset=utf-8',
+			});
+			const events = parseCalendarQueryResponse(
+				resp.body,
+				target.url,
+				serverUrl,
+				rangeStart,
+				rangeEnd,
+			);
+			for (const event of events) {
+				if (accept && !accept(event)) continue;
+				collected.push({
+					...((simplify ? simplifyEvent(event) : event) as unknown as IDataObject),
+					calendarUrl: target.url,
+					calendarName: target.displayName || undefined,
+				});
+			}
+		} catch (err) {
+			// Skip calendars that reject REPORT (read-only feeds, schedule inbox);
+			// one bad collection shouldn't fail a cross-calendar read.
+			this.logger?.debug(`[CalDAV] REPORT skipped for ${target.url}: ${(err as Error).message}`);
+		}
+	}
+
+	// Deterministic order by start time when reading across calendars.
+	collected.sort((a, b) => String(a.start ?? '').localeCompare(String(b.start ?? '')));
+	return collected;
+}
 
 export class CalDav implements INodeType {
 	description: INodeTypeDescription = {
@@ -78,10 +198,25 @@ export class CalDav implements INodeType {
 						},
 					];
 				}
-				return calendars.map((c) => ({
-					name: c.displayName,
-					value: c.url,
-				}));
+				// Pseudo-entries:
+				//   __DEFAULT__: resolve to the credential's "Default Calendar"
+				//                hint at execute time. Valid for every operation.
+				//   __ALL__:     iterate over every visible calendar. Valid only
+				//                for Get Many / Get Next / Search.
+				return [
+					{
+						name: '🏠 Default Calendar (From Credentials)',
+						value: '__DEFAULT__',
+					},
+					{
+						name: '⭐ All Calendars (Search Across)',
+						value: '__ALL__',
+					},
+					...calendars.map((c) => ({
+						name: c.displayName,
+						value: c.url,
+					})),
+				];
 			},
 		},
 	};
@@ -119,7 +254,32 @@ export class CalDav implements INodeType {
 							{ itemIndex: i },
 						);
 					}
-					const calUrlNormalised = calendarUrl.endsWith('/') ? calendarUrl : `${calendarUrl}/`;
+					// "All Calendars" is only valid for the multi-calendar reads.
+					const allOpsAllowed = ['getAll', 'getNext', 'search'];
+					if (calendarUrl === '__ALL__' && !allOpsAllowed.includes(operation)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`"All Calendars" can only be used with Get Many / Get Next / Search. Pick a specific calendar for "${operation}".`,
+							{ itemIndex: i },
+						);
+					}
+					// Resolve "Default Calendar" from credentials at execute time.
+					let resolvedUrl = calendarUrl;
+					if (calendarUrl === '__DEFAULT__') {
+						try {
+							resolvedUrl = await resolveDefaultCalendar.call(this, serverUrl, username);
+						} catch (e) {
+							throw new NodeOperationError(this.getNode(), (e as Error).message, {
+								itemIndex: i,
+							});
+						}
+					}
+					const calUrlNormalised =
+						resolvedUrl === '__ALL__'
+							? '__ALL__'
+							: resolvedUrl.endsWith('/')
+								? resolvedUrl
+								: `${resolvedUrl}/`;
 
 					if (operation === 'create') {
 						const summary = this.getNodeParameter('summary', i) as string;
@@ -157,8 +317,8 @@ export class CalDav implements INodeType {
 							pairedItem: { item: i },
 						});
 					} else if (operation === 'get') {
-						const uid = this.getNodeParameter('uid', i) as string;
-						const eventUrl = `${calUrlNormalised}${encodeURIComponent(uid)}.ics`;
+						const { uid, eventUrl } = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
+						const simplify = this.getNodeParameter('simplify', i, true) as boolean;
 						const resp = await davRequest.call(this, 'GET', eventUrl, undefined, {
 							Accept: 'text/calendar',
 						});
@@ -169,24 +329,88 @@ export class CalDav implements INodeType {
 								{ message: `Event ${uid} not parseable`, description: resp.body } as unknown as JsonObject,
 							);
 						}
-						returnData.push({ json: parsed as unknown as IDataObject, pairedItem: { item: i } });
-					} else if (operation === 'getAll') {
-						const timeMin = this.getNodeParameter('timeMin', i) as string;
-						const timeMax = this.getNodeParameter('timeMax', i) as string;
+						const record = simplify ? simplifyEvent(parsed) : parsed;
+						returnData.push({ json: record as unknown as IDataObject, pairedItem: { item: i } });
+					} else if (operation === 'getAll' || operation === 'getNext' || operation === 'search') {
+						// The three reads differ only in the window they ask for and the
+						// predicate they apply; everything else is shared.
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;
 						const limit = returnAll ? Infinity : (this.getNodeParameter('limit', i) as number);
-						const body = buildTimeRangeReport(timeMin, timeMax);
-						const resp = await davRequest.call(this, 'REPORT', calUrlNormalised, body, {
-							Depth: '1',
-							'Content-Type': 'application/xml; charset=utf-8',
-						});
-						const events = parseCalendarQueryResponse(resp.body, calUrlNormalised, serverUrl);
-						const sliced = events.slice(0, limit);
-						for (const ev of sliced) {
-							returnData.push({ json: ev as unknown as IDataObject, pairedItem: { item: i } });
+						const simplify = this.getNodeParameter('simplify', i, true) as boolean;
+
+						let rangeStart: Date;
+						let rangeEnd: Date;
+						let accept: ((event: CalDavEvent) => boolean) | undefined;
+
+						if (operation === 'getNext') {
+							const lookaheadDays = this.getNodeParameter('lookaheadDays', i, 30) as number;
+							rangeStart = new Date();
+							rangeEnd = new Date(rangeStart.getTime() + lookaheadDays * 24 * 60 * 60 * 1000);
+							// A series can start before "now" and still have an occurrence
+							// inside the window; only drop the ones already past.
+							const from = rangeStart;
+							accept = (event) => !event.start || new Date(event.start) >= from;
+						} else {
+							rangeStart = readWindowBound.call(this, i, 'timeMin', 'Time Min');
+							rangeEnd = readWindowBound.call(this, i, 'timeMax', 'Time Max');
+							if (operation === 'search') {
+								const query = this.getNodeParameter('query', i) as string;
+								accept = (event) => eventMatchesText(event, query);
+							}
 						}
+
+						const collected = await collectEvents.call(this, {
+							calendarUrl: calUrlNormalised,
+							serverUrl,
+							username,
+							rangeStart,
+							rangeEnd,
+							simplify,
+							accept,
+						});
+						for (const ev of collected.slice(0, limit)) {
+							returnData.push({ json: ev, pairedItem: { item: i } });
+						}
+					} else if (operation === 'move') {
+						const located = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
+						const targetCalendarRaw = this.getNodeParameter('targetCalendar', i) as string;
+						if (!targetCalendarRaw) {
+							throw new NodeOperationError(this.getNode(), 'Target Calendar is required for the Move operation.', { itemIndex: i });
+						}
+						if (targetCalendarRaw === '__ALL__') {
+							throw new NodeOperationError(this.getNode(), '"All Calendars" is not a valid target for Move. Pick a specific destination.', { itemIndex: i });
+						}
+						const targetUrl =
+							targetCalendarRaw === '__DEFAULT__'
+								? await resolveDefaultCalendar.call(this, serverUrl, username)
+								: targetCalendarRaw.endsWith('/')
+									? targetCalendarRaw
+									: `${targetCalendarRaw}/`;
+						if (targetUrl === calUrlNormalised) {
+							throw new NodeOperationError(this.getNode(), 'Source and target calendars are identical — nothing to move.', { itemIndex: i });
+						}
+						const sourceEventUrl = located.eventUrl;
+						const getResp = await davRequest.call(this, 'GET', sourceEventUrl, undefined, { Accept: 'text/calendar' });
+						const sourceEtag = (getResp.headers.etag as string | undefined)?.replace(/"/g, '');
+						// The destination filename is derived from the UID. When the event
+						// was addressed by URL we don't have one yet, so read it back out
+						// of the resource we just fetched.
+						const uid =
+							located.uid || parseICalEvent(getResp.body, sourceEventUrl)?.uid || randomUUID();
+						const targetEventUrl = `${targetUrl}${encodeURIComponent(uid)}.ics`;
+						const putResp = await davRequest.call(this, 'PUT', targetEventUrl, getResp.body, {
+							'Content-Type': 'text/calendar; charset=utf-8',
+							'If-None-Match': '*',
+						});
+						const newEtag = (putResp.headers.etag as string | undefined)?.replace(/"/g, '');
+						await davRequest.call(this, 'DELETE', sourceEventUrl, undefined, sourceEtag ? { 'If-Match': `"${sourceEtag}"` } : undefined);
+						returnData.push({
+							json: { uid, oldUrl: sourceEventUrl, newUrl: targetEventUrl, etag: newEtag, moved: true },
+							pairedItem: { item: i },
+						});
 					} else if (operation === 'update') {
-						const uid = this.getNodeParameter('uid', i) as string;
+						const located = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
+						const uid = located.uid;
 						const summary = this.getNodeParameter('summary', i) as string;
 						const start = this.getNodeParameter('start', i) as string;
 						const end = this.getNodeParameter('end', i) as string;
@@ -197,8 +421,33 @@ export class CalDav implements INodeType {
 						const remindersRaw = (additional.reminders as IDataObject)?.reminder as
 							| Array<{ minutesBefore: number; action?: 'DISPLAY' | 'EMAIL' }>
 							| undefined;
-						const iCal = buildICalEvent({
-							uid,
+						const eventUrl = located.eventUrl;
+
+						// Read-modify-write. Fetching the current resource first is what
+						// lets fields the caller didn't supply survive the update, and
+						// its ETag guards against clobbering a concurrent edit.
+						let existing;
+						try {
+							existing = await davRequest.call(this, 'GET', eventUrl, undefined, {
+								Accept: 'text/calendar',
+							});
+						} catch (err) {
+							if ((err as { httpCode?: string }).httpCode === '404') {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Event "${uid || eventUrl}" was not found in this calendar.`,
+									{
+										itemIndex: i,
+										description:
+											'Check that the UID is correct and that the event lives in the selected calendar. If you already have the event\'s URL from a read operation, supply it in the Event URL field.',
+									},
+								);
+							}
+							throw err;
+						}
+						const currentEtag = (existing.headers.etag as string | undefined)?.replace(/"/g, '');
+
+						const iCal = patchICalEvent(existing.body, {
 							summary,
 							start,
 							end,
@@ -210,20 +459,37 @@ export class CalDav implements INodeType {
 							attendees: attendeesRaw,
 							reminders: remindersRaw,
 						});
-						const eventUrl = `${calUrlNormalised}${encodeURIComponent(uid)}.ics`;
-						const resp = await davRequest.call(this, 'PUT', eventUrl, iCal, {
+
+						const putHeaders: Record<string, string> = {
 							'Content-Type': 'text/calendar; charset=utf-8',
-						});
+						};
+						if (currentEtag) putHeaders['If-Match'] = `"${currentEtag}"`;
+						let resp;
+						try {
+							resp = await davRequest.call(this, 'PUT', eventUrl, iCal, putHeaders);
+						} catch (err) {
+							if ((err as { httpCode?: string }).httpCode === '412') {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Event "${uid}" was modified by someone else while this update was in flight.`,
+									{
+										itemIndex: i,
+										description:
+											'The update was rejected rather than overwriting the newer version. Re-read the event and retry.',
+									},
+								);
+							}
+							throw err;
+						}
 						const etag = (resp.headers.etag as string | undefined)?.replace(/"/g, '');
 						returnData.push({
 							json: { uid, url: eventUrl, etag, summary, start, end, updated: true },
 							pairedItem: { item: i },
 						});
 					} else if (operation === 'delete') {
-						const uid = this.getNodeParameter('uid', i) as string;
-						const eventUrl = `${calUrlNormalised}${encodeURIComponent(uid)}.ics`;
+						const { uid, eventUrl } = await locateEvent.call(this, i, calUrlNormalised, serverUrl);
 						await davRequest.call(this, 'DELETE', eventUrl);
-						returnData.push({ json: { uid, deleted: true }, pairedItem: { item: i } });
+						returnData.push({ json: { uid, url: eventUrl, deleted: true }, pairedItem: { item: i } });
 					} else {
 						throw new NodeOperationError(this.getNode(), `Unknown event operation: ${operation}`);
 					}

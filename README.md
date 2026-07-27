@@ -11,8 +11,10 @@ This node gives n8n a full CRUD interface to CalDAV calendars. In practical term
 - **List your calendars** — auto-discovers every calendar on the server via CalDAV's well-known endpoints. No hard-coded URLs.
 - **Create events** with title, start/end (ISO 8601 with timezone), description, location, attendees, recurrence (RRULE), and multiple reminders (VALARM).
 - **Fetch events** for any time window via server-side `REPORT` queries — fast even on calendars with thousands of events.
-- **Update events** — change time, location, reminders, attendees — by UID.
-- **Delete events** by UID.
+- **Expand recurring series** — a weekly meeting is returned as the individual occurrences that fall inside your window, with `EXDATE` exclusions and moved instances (`RECURRENCE-ID`) applied.
+- **Update events** — change time, location, reminders, attendees. Updates are applied as a patch: fields you don't supply keep their stored value, including properties this node doesn't model (categories, organiser, custom `X-` properties).
+- **Delete events** by UID or URL.
+- **Address events written by other clients** — Get / Update / Delete / Move accept either the event's URL (as returned by every read operation) or its UID, which is resolved against the server. Events created in Thunderbird, Apple Calendar, or a web UI are stored under a filename the server chose, not under their UID.
 - **Round-trip iCalendar** — events you write come back correctly parsed, including RRULE, TZID, and alarms.
 - **Use it as an AI Agent tool** — every field has an LLM-readable description with examples, so an agent can call it cold and get it right on the first try.
 
@@ -28,8 +30,26 @@ This node gives n8n a full CRUD interface to CalDAV calendars. In practical term
 
 | Resource | Operations                                | Notes                                               |
 | -------- | ----------------------------------------- | --------------------------------------------------- |
-| Calendar | Get Many                                  | Lists every calendar available to the user          |
-| Event    | Create · Get · Get Many · Update · Delete | Full CRUD with iCalendar field support              |
+| Calendar | Get Many                                                        | Lists every calendar available to the user                          |
+| Event    | Create · Get · Get Many · Get Next · Search · Update · Move · Delete | Full CRUD, cross-calendar reads, and recurrence expansion       |
+
+### Event output format
+
+Read operations (`Get`, `Get Many`, `Get Next`, `Search`) return:
+
+| Field                  | Value                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `start` / `end`        | All-day: `2026-04-20`. Timed: an ISO 8601 UTC instant, `2026-04-20T12:00:00.000Z`.           |
+| `timezone`             | The `TZID` the event is stored under, when it has one (e.g. `Europe/Berlin`).                |
+| `allDay`               | `true` for date-only events.                                                                 |
+| `recurrenceId`         | Present only on an occurrence of a recurring series, identifying which slot it is.           |
+| `uid` / `url`          | Shared by every occurrence of a series.                                                      |
+| `rrule`                | The series rule, repeated on each occurrence.                                                |
+| `raw`                  | The full `VCALENDAR` source — only when **Simplify** is turned off.                          |
+
+> Changed in 2.9.0: read operations have a **Simplify** toggle, on by default, which omits `raw`. A recurring series repeats the same full `VCALENDAR` on every expanded occurrence, so leaving it in bloats the output and — when the node is used as an AI Agent tool — burns context. Turn Simplify off to get the old payload back.
+
+> Changed in 2.8.0: timed events previously reported `start` as a local wall clock with no offset (`2026-04-20T14:00:00`), which downstream nodes re-read in the n8n host's timezone. Times are now emitted as explicit UTC instants and sort correctly.
 
 ### Event fields supported
 
@@ -115,6 +135,8 @@ Name it `n8n-caldav`.
 
 **4. "Event shows in wrong timezone (UTC / GMT+00:00)"** — set the **Timezone** field on the event (e.g. `Europe/Berlin`). Otherwise the event is stored as UTC and some clients display it literally.
 
+> Versions before 2.7.0 additionally shifted timed events by the *n8n host's* UTC offset whenever **Timezone** was set, and wrote all-day events on the wrong calendar date. If you created events with an older version, re-check their times.
+
 ## AI Agent Usage
 
 The node is declared `usableAsTool: true` with LLM-friendly descriptions on every parameter. An AI Agent can call it directly from a chat prompt. Example:
@@ -185,7 +207,8 @@ You are a calendar assistant with access to a CalDAV tool.
 2. **No Free/Busy** (`calendar-availability`) — only the basic `calendar-query` REPORT.
 3. **No attachments** (VEVENT ATTACH property).
 4. **No scheduling / RSVP** — attendees are written as ATTENDEE lines, but no server-side `METHOD:REQUEST` invitation email is triggered.
-5. **No multi-calendar search** — `Event → Get Many` queries one calendar at a time. For a cross-calendar view, loop in the workflow.
+5. **Recurrence is per-series, not per-occurrence** — reads expand a series into its occurrences, but all occurrences share one UID and one URL. Deleting or updating by UID therefore affects the whole series; there is no way to change a single occurrence.
+6. **No `VTIMEZONE` is written** — events are stored with a `TZID` parameter but without the matching `VTIMEZONE` component. Clients resolve IANA identifiers from their own database, so this works in practice, but it is not strictly RFC 5545 compliant.
 
 ## Built with AI
 
@@ -202,31 +225,36 @@ If you find a bug or want a feature, open an issue — I'll fix it the same way.
 ## Development
 
 ```bash
-npm run dev      # tsc --watch
-npm run build    # tsc + gulp build:icons
-npm run lint     # eslint
-npm run format   # prettier
+npm run dev        # tsc --watch
+npm run build      # tsc + gulp build:icons
+npm run lint       # eslint
+npm run format     # prettier
+npm test           # vitest — unit tests, no server needed
+npm run test:watch # vitest in watch mode
 ```
 
-### Running the E2E test
+The tests cover iCalendar generation, the update merge, recurrence expansion,
+event lookup, and the read operations end to end against a fake CalDAV server —
+no network and no credentials required.
 
-Credentials are read from environment variables — no secrets are stored in the repo.
+They run the
+same input under several host timezones (`UTC`, `Europe/Berlin`,
+`America/New_York`, `Asia/Tokyo`) and assert the output is identical — the
+timezone bugs fixed in 2.7.0 were only visible when the host's zone differed
+from the event's, which is the normal case in Docker.
 
-```bash
-# bash / macOS / Linux
-export CALDAV_SERVER=https://sync.infomaniak.com/
-export CALDAV_USERNAME=your-short-username
-export CALDAV_PASSWORD=your-app-password
-node e2e-test.js
-```
+### Manual testing against your CalDAV server
 
-```powershell
-# Windows PowerShell
-$env:CALDAV_SERVER="https://sync.infomaniak.com/"
-$env:CALDAV_USERNAME="your-short-username"
-$env:CALDAV_PASSWORD="your-app-password"
-node e2e-test.js
-```
+Local test scripts (`e2e-test.js`, `smoke-test.js`) live in `.gitignore` so they
+never end up in the published repo or npm package. To verify the build against
+a real server during development, install the node into your local n8n custom
+folder via `npm link` (see "Local development" above) and trigger the operations
+through the n8n UI — that's the canonical integration path.
+
+If you want a headless smoke check, write a small script that imports from
+`dist/nodes/CalDav/GenericFunctions.js` and calls `discoverCalendars`,
+`buildICalEvent`, `parseCalendarQueryResponse` directly. Read credentials
+from environment variables — never hard-code them.
 
 ## License
 

@@ -1,0 +1,32 @@
+# Sources are not shipped — only dist/ goes to npm (declared in package.json "files").
+# This file just adds belt-and-braces protection for things that must never publish.
+
+# Local test scripts that hit a live server with real credentials
+e2e-test.js
+smoke-test.js
+
+# Unit tests
+test/
+vitest.config.*
+
+# Source TS, configs, and IDE noise
+*.ts
+!*.d.ts
+tsconfig.json
+gulpfile.js
+.eslintrc.js
+.editorconfig
+.prettierrc*
+.vscode/
+.idea/
+.github/
+
+# Environment / secrets
+.env
+.env.*
+*.log
+
+# Dev metadata
+.git/
+.gitignore
+*.tsbuildinfo

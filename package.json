@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-caldav-pro",
-  "version": "2.3.3",
+  "version": "2.9.2",
   "description": "n8n community node for CalDAV calendars (Infomaniak, NextCloud, iCloud, Fastmail). Usable as AI Agent tool.",
   "keywords": [
     "n8n-community-node-package",
@@ -29,10 +29,13 @@
     "format": "prettier nodes credentials --write",
     "lint": "eslint nodes credentials package.json",
     "lintfix": "eslint nodes credentials package.json --fix",
-    "prepublishOnly": "npm run build && npm run lint"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm run lint && npm test"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
@@ -59,6 +62,7 @@
     "jsonc-eslint-parser": "^3.1.0",
     "n8n-workflow": "*",
     "prettier": "^3.3.2",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.9"
   }
 }

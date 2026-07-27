@@ -44,6 +44,33 @@ export class CalDavApi implements ICredentialType {
 				'Your CalDAV password. If 2FA is enabled on your account (Infomaniak, iCloud, Google), you MUST generate an app-specific password at the provider manager. Regular login passwords will be rejected.',
 			required: true,
 		},
+		{
+			displayName: 'Default Calendar',
+			name: 'defaultCalendar',
+			type: 'string',
+			default: '',
+			placeholder: 'Privat   or   c8763b63   or   https://sync…/calendars/user/uuid/',
+			description:
+				'Optional. The calendar used when an event operation has Calendar set to "Default Calendar (from credentials)". Accepts a full calendar URL, a UUID fragment, or a unique substring of the display name (case-insensitive). If you leave this empty, the AI Agent (or you) MUST always pick a specific calendar in the node.',
+		},
+		{
+			displayName: 'Calendar Allow-List',
+			name: 'calendarAllowList',
+			type: 'string',
+			default: '',
+			placeholder: 'Privat, Arbeit, /^Team /',
+			description:
+				'Optional. Comma-separated list of calendars to INCLUDE. All other calendars are hidden from the dropdown and from "All Calendars" search. Each entry is matched case-insensitively against the calendar display name AND the calendar URL — so you can target by UUID when names collide, e.g. "190b2e38" hides only the calendar whose URL contains that UUID. Wrap in slashes for regex, e.g. "/^Team /" matches names starting with "Team ".',
+		},
+		{
+			displayName: 'Calendar Block-List',
+			name: 'calendarBlockList',
+			type: 'string',
+			default: '',
+			placeholder: 'Feiertage, 190b2e38, /Holiday/i',
+			description:
+				'Optional. Comma-separated list of calendars to EXCLUDE. Useful for hiding subscribed feeds, holidays, school terms, or specific shared calendars. Each entry matches against the display name AND URL — paste a UUID fragment to block one specific calendar even when its name duplicates another. Block-list applies AFTER the allow-list (block always wins). Wrap in slashes for regex, e.g. "/feiertag/i".',
+		},
 	];
 
 	/**
