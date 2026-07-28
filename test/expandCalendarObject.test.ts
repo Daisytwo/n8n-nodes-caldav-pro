@@ -478,3 +478,97 @@ describe('local time rendering', () => {
 		expect(event.startLocal).toBe('2026-07-28T21:00:00+02:00');
 	});
 });
+
+describe('timezone coverage', () => {
+	const at = (wallClock: string, tz: string) =>
+		calendar(
+			'BEGIN:VEVENT',
+			'UID:tz',
+			'DTSTAMP:20260101T000000Z',
+			`DTSTART;TZID=${tz}:${wallClock}`,
+			`DTEND;TZID=${tz}:${wallClock}`,
+			'SUMMARY:S',
+			'END:VEVENT',
+		);
+
+	/** What clock does `instant` show in `tz`? */
+	const wallClockIn = (instant: Date, tz: string) => {
+		const parts = new Intl.DateTimeFormat('en-US', {
+			timeZone: tz,
+			hourCycle: 'h23',
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+			hour: '2-digit',
+			minute: '2-digit',
+		}).formatToParts(instant);
+		const v = (t: string) => parts.find((p) => p.type === t)!.value.padStart(2, '0');
+		return `${v('year')}${v('month')}${v('day')}T${v('hour') === '24' ? '00' : v('hour')}${v('minute')}`;
+	};
+
+	it('round-trips every timezone the runtime knows', () => {
+		// Whatever zone an event is stored under, the UTC instant we report must
+		// show the original wall clock again when read back in that zone.
+		const zones = (Intl as unknown as { supportedValuesOf(k: string): string[] }).supportedValuesOf(
+			'timeZone',
+		);
+		expect(zones.length).toBeGreaterThan(300);
+		const samples = ['20260115T093000', '20260728T210000', '20261115T233000'];
+		const failures: string[] = [];
+		for (const tz of zones) {
+			for (const clock of samples) {
+				const [event] = expandCalendarObject(at(clock, tz), URL);
+				if (!event?.start) {
+					failures.push(`${tz} ${clock}: no result`);
+					continue;
+				}
+				// wallClockIn yields YYYYMMDDTHHMM; the sample carries seconds too.
+				const back = wallClockIn(new Date(event.start), tz);
+				if (back !== clock.slice(0, 13)) failures.push(`${tz} ${clock} -> ${back}`);
+				if (new Date(event.startLocal!).getTime() !== new Date(event.start).getTime()) {
+					failures.push(`${tz} ${clock}: startLocal disagrees with start`);
+				}
+			}
+		}
+		expect(failures.slice(0, 10)).toEqual([]);
+	});
+
+	it('handles offsets that are not whole hours', () => {
+		const expected: Array<[string, string]> = [
+			['Asia/Kolkata', '+05:30'],
+			['Asia/Kathmandu', '+05:45'],
+			['Pacific/Chatham', '+12:45'],
+			['America/St_Johns', '-02:30'],
+			['Pacific/Kiritimati', '+14:00'],
+		];
+		for (const [tz, offset] of expected) {
+			const [event] = expandCalendarObject(at('20260728T210000', tz), URL);
+			expect(event.startLocal).toBe(`2026-07-28T21:00:00${offset}`);
+		}
+	});
+
+	it('applies southern-hemisphere DST in the opposite season', () => {
+		// January is summer in Sydney, so +11:00 rather than the +10:00 standard.
+		const [january] = expandCalendarObject(at('20260128T210000', 'Australia/Sydney'), URL);
+		const [july] = expandCalendarObject(at('20260728T210000', 'Australia/Sydney'), URL);
+		expect(january.startLocal).toBe('2026-01-28T21:00:00+11:00');
+		expect(july.startLocal).toBe('2026-07-28T21:00:00+10:00');
+	});
+
+	it('stays self-consistent across a DST gap or overlap', () => {
+		// A wall clock inside a spring-forward gap does not exist, and one inside
+		// an autumn overlap happens twice. Which side we land on is a convention
+		// — but start and startLocal must always name the same instant.
+		for (const [tz, clock] of [
+			['Europe/Berlin', '20260329T023000'],
+			['Europe/Berlin', '20261025T023000'],
+			['America/New_York', '20260308T023000'],
+			['America/New_York', '20261101T013000'],
+			['Australia/Lord_Howe', '20261004T020000'],
+		] as Array<[string, string]>) {
+			const [event] = expandCalendarObject(at(clock, tz), URL);
+			expect(new Date(event.startLocal!).getTime()).toBe(new Date(event.start!).getTime());
+			expect(wallClockIn(new Date(event.start!), tz)).toBe(event.startLocal!.slice(0, 16).replace(/[-:]/g, ''));
+		}
+	});
+});
