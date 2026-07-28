@@ -136,7 +136,7 @@ export const eventFields: INodeProperties[] = [
 		type: 'boolean',
 		default: false,
 		description:
-			'Whether to act on every occurrence of a recurring event. All occurrences of a series share one UID and one resource, so deleting or updating by UID always hits the whole series — there is no way to change a single occurrence yet. When the target turns out to be recurring and this is off, the operation is refused rather than silently affecting every occurrence. Has no effect on non-recurring events.',
+			'Whether to act on every occurrence of a recurring event. All occurrences share one UID and one resource, so acting by UID alone would hit the whole series; when the target turns out to be recurring and neither this nor "Occurrence" is set, the operation is refused rather than silently affecting every date. Use "Occurrence" instead to act on a single date. Has no effect on non-recurring events.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
@@ -217,7 +217,7 @@ export const eventFields: INodeProperties[] = [
 		required: true,
 		default: '={{ $now }}',
 		description:
-			'Event start time in ISO 8601 format with timezone offset, e.g. "2026-04-20T14:00:00+02:00". Use UTC ("Z") if timezone is unknown.',
+			'Event start time. Simplest form: the local wall clock plus the Timezone field, e.g. "2026-04-20T14:00:00" with Timezone "Europe/Berlin" — no need to know whether summer time applies. An explicit offset ("2026-04-20T14:00:00+02:00") or UTC ("...Z") is taken at face value.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
@@ -232,7 +232,7 @@ export const eventFields: INodeProperties[] = [
 		required: true,
 		default: "={{ $now.plus(1, 'hour') }}",
 		description:
-			'Event end time in ISO 8601 format with timezone offset, e.g. "2026-04-20T15:00:00+02:00". Must be after Start. For all-day events you can give the last day inclusively (same day as Start for a one-day event) — it is converted to the exclusive end iCalendar requires.',
+			'Event end time, in the same form as Start. Must be after Start. For all-day events you can give the last day inclusively (same day as Start for a one-day event) — it is converted to the exclusive end iCalendar requires.',
 		displayOptions: {
 			show: {
 				resource: ['event'],
@@ -367,7 +367,7 @@ export const eventFields: INodeProperties[] = [
 				default: '',
 				placeholder: 'Europe/Berlin',
 				description:
-					'IANA timezone identifier to attach to Start/End via TZID. Leave empty to use UTC (Z suffix).',
+					'IANA timezone identifier, e.g. "Europe/Berlin". When Start/End carry no offset they are read as wall-clock times in this zone, so the correct summer or winter offset is applied for you. Leave empty to have Start/End interpreted as given, storing the event in UTC.',
 			},
 			{
 				displayName: 'UID',

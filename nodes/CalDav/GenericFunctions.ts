@@ -706,7 +706,37 @@ function allDayTime(iso: string, field: string, tz?: string): any {
 	});
 }
 
+/** Does the string state its offset, either "Z" or "+02:00"? */
+function hasExplicitOffset(iso: string): boolean {
+	return /(?:Z|[+-]\d{2}:?\d{2})\s*$/i.test(iso);
+}
+
+/** The literal Y-M-D H:M:S written in a string, before any zone is applied. */
+function naiveParts(iso: string): WallClock | null {
+	const m = /^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(iso);
+	if (!m) return null;
+	return {
+		year: +m[1],
+		month: +m[2],
+		day: +m[3],
+		hour: +m[4],
+		minute: +m[5],
+		second: m[6] ? +m[6] : 0,
+	};
+}
+
 function timedTime(iso: string, field: string, tz?: string): any {
+	// "2026-07-29T14:00:00" with Timezone Europe/Berlin means two o'clock in
+	// Berlin. Without this it would be read in the n8n host's zone — usually
+	// UTC — and stored two hours out. Callers that do state an offset, or "Z",
+	// are taken at their word.
+	if (tz && !hasExplicitOffset(iso)) {
+		const naive = naiveParts(iso);
+		if (naive) {
+			if (!isKnownZone(tz)) zoneFormatter(tz); // throws with a clear message
+			return ICAL.Time.fromData({ ...naive, isDate: false });
+		}
+	}
 	const d = parseInstant(iso, field);
 	if (tz) {
 		const w = wallClockInZone(d, tz);

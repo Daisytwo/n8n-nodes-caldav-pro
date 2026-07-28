@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0]
+
+### Fixed
+
+- **A Start or End without an offset is now read in the Timezone field's zone,
+  not the n8n host's.** `2026-07-29T14:00:00` with Timezone `Europe/Berlin`
+  means two o'clock in Berlin; it was previously parsed in the host's zone —
+  usually UTC in Docker — and stored two hours out. The same class of error as
+  the one fixed in 3.0.0, on the input side, and only when the offset was left
+  off.
+
+  This means a caller no longer has to know whether summer time applies. An
+  explicit offset, or a trailing `Z`, is still taken at face value.
+
+  If you were compensating by always writing an explicit offset, nothing
+  changes. If you passed naive times and corrected for the shift elsewhere,
+  remove that correction.
+
+### Changed
+
+- The Start, End, and Timezone descriptions now say so, since those are what an
+  AI Agent reads when deciding what to send.
+
 ## [3.3.0]
 
 ### Added

@@ -188,3 +188,47 @@ describe('buildICalEvent — serialisation', () => {
 		expect(line(ics, 'RRULE')).toBeUndefined();
 	});
 });
+
+describe('buildICalEvent — local time without an offset', () => {
+	const dtstart = (ics: string) => line(ics, 'DTSTART');
+
+	it('reads a naive time in the given timezone, not the host one', () => {
+		// "14:00 with Timezone Europe/Berlin" means two o'clock in Berlin. Read
+		// in the host's zone instead — usually UTC in Docker — it lands two
+		// hours out, and the caller has no way to see that happen.
+		for (const host of HOST_ZONES) {
+			const ics = withTZ(host, () =>
+				buildICalEvent({ ...base, start: '2026-07-29T14:00:00', end: '2026-07-29T15:00:00', timezone: 'Europe/Berlin' }),
+			);
+			expect(dtstart(ics)).toBe('DTSTART;TZID=Europe/Berlin:20260729T140000');
+		}
+	});
+
+	it('needs no knowledge of which offset is in force', () => {
+		const summer = buildICalEvent({ ...base, start: '2026-07-29T14:00:00', end: '2026-07-29T15:00:00', timezone: 'Europe/Berlin' });
+		const winter = buildICalEvent({ ...base, start: '2026-01-29T14:00:00', end: '2026-01-29T15:00:00', timezone: 'Europe/Berlin' });
+		expect(dtstart(summer)).toBe('DTSTART;TZID=Europe/Berlin:20260729T140000');
+		expect(dtstart(winter)).toBe('DTSTART;TZID=Europe/Berlin:20260129T140000');
+	});
+
+	it('takes an explicit offset at its word', () => {
+		const ics = withTZ('UTC', () =>
+			buildICalEvent({ ...base, start: '2026-07-29T14:00:00+02:00', end: '2026-07-29T15:00:00+02:00', timezone: 'Europe/Berlin' }),
+		);
+		expect(dtstart(ics)).toBe('DTSTART;TZID=Europe/Berlin:20260729T140000');
+	});
+
+	it('still treats a trailing Z as UTC', () => {
+		// 14:00Z really is 16:00 in Berlin; saying Z is saying UTC.
+		const ics = withTZ('UTC', () =>
+			buildICalEvent({ ...base, start: '2026-07-29T14:00:00Z', end: '2026-07-29T15:00:00Z', timezone: 'Europe/Berlin' }),
+		);
+		expect(dtstart(ics)).toBe('DTSTART;TZID=Europe/Berlin:20260729T160000');
+	});
+
+	it('rejects an unknown timezone even on the naive path', () => {
+		expect(() =>
+			buildICalEvent({ ...base, start: '2026-07-29T14:00:00', end: '2026-07-29T15:00:00', timezone: 'Europe/Bearlin' }),
+		).toThrow(/Unknown timezone/);
+	});
+});
