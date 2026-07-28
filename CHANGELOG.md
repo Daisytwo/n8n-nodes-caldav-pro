@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0]
+
+### Added
+
+- **`startLocal` and `endLocal`** on returned events: the same moment as the
+  event's own local time with its offset applied, `2026-07-28T21:00:00+02:00`.
+
+  `start` is a UTC instant because that is what sorts and computes correctly,
+  but reading a local time off it requires knowing the offset in force on that
+  date — and language models get that wrong. Asked to show a 19:00Z summer
+  event in Berlin, one reported 23:00, then 20:00 on a later run: no offset,
+  then the winter offset. For a node that advertises `usableAsTool`, handing
+  the model arithmetic it cannot reliably do is a design fault, not the model's
+  problem.
+
+  Events stored in plain UTC carry no zone of their own and are rendered in the
+  workflow's timezone. All-day events keep their bare date. `start` and `end`
+  are unchanged, so nothing that reads them needs to.
+
+- The node description now tells an agent which field to use for what.
+
 ## [3.1.2]
 
 ### Fixed

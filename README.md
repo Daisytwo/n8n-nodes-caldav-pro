@@ -42,13 +42,21 @@ Read operations (`Get`, `Get Many`, `Get Next`, `Search`) return:
 
 | Field                  | Value                                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
-| `start` / `end`        | All-day: `2026-04-20`. Timed: an ISO 8601 UTC instant, `2026-04-20T12:00:00.000Z`.           |
+| `start` / `end`        | All-day: `2026-04-20`. Timed: an ISO 8601 UTC instant, `2026-04-20T12:00:00.000Z`. Use for sorting and arithmetic. |
+| `startLocal` / `endLocal` | The same moment as the event's own local time, offset applied: `2026-04-20T14:00:00+02:00`. Use for display. |
 | `timezone`             | The `TZID` the event is stored under, when it has one (e.g. `Europe/Berlin`).                |
 | `allDay`               | `true` for date-only events.                                                                 |
 | `recurrenceId`         | Present only on an occurrence of a recurring series, identifying which slot it is.           |
 | `uid` / `url`          | Shared by every occurrence of a series.                                                      |
 | `rrule`                | The series rule, repeated on each occurrence.                                                |
 | `raw`                  | The full `VCALENDAR` source — only when **Simplify** is turned off.                          |
+
+> Added in 3.2.0: `startLocal` / `endLocal`. Reading a local time off a UTC
+> instant means knowing the offset in force on that date, and language models
+> get that wrong — asked to show a 19:00Z summer event in Berlin, one reported
+> 23:00 and, on a later run, 20:00. These fields do the arithmetic so the agent
+> does not have to. Events stored in plain UTC are rendered in the workflow's
+> timezone.
 
 > Changed in 2.9.0: read operations have a **Simplify** toggle, on by default, which omits `raw`. A recurring series repeats the same full `VCALENDAR` on every expanded occurrence, so leaving it in bloats the output and — when the node is used as an AI Agent tool — burns context. Turn Simplify off to get the old payload back.
 

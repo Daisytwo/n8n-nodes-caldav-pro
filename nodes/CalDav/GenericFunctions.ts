@@ -34,6 +34,13 @@ export interface CalDavEvent {
 	/** All-day events: "YYYY-MM-DD". Timed events: an ISO 8601 UTC instant. */
 	start?: string;
 	end?: string;
+	/**
+	 * The same moment as the event's own wall clock, with its offset attached
+	 * ("2026-07-28T21:00:00+02:00"). Read this to display a time; read `start`
+	 * to sort or compute with one.
+	 */
+	startLocal?: string;
+	endLocal?: string;
 	allDay?: boolean;
 	/** The TZID the event is stored under, when it has one. */
 	timezone?: string;
@@ -600,6 +607,54 @@ function instantOf(time: any, tzid?: string): Date {
 	return time.toJSDate();
 }
 
+/** The zone's offset from UTC at a given instant, in minutes. */
+function zoneOffsetMinutes(instant: Date, tz: string): number {
+	const shown = wallClockInZone(instant, tz);
+	const asUtc = Date.UTC(
+		shown.year,
+		shown.month - 1,
+		shown.day,
+		shown.hour,
+		shown.minute,
+		shown.second,
+	);
+	return Math.round((asUtc - instant.getTime()) / 60000);
+}
+
+/**
+ * The event's own wall clock with its offset attached, e.g.
+ * "2026-07-28T21:00:00+02:00".
+ *
+ * `start` is a UTC instant because that is what sorts and computes correctly,
+ * but reading a local time off it requires knowing the offset in force on that
+ * date. Language models get that wrong: asked to show a 19:00Z summer event in
+ * Berlin, one reported 23:00 and, on a later run, 20:00 — applying no offset
+ * and then the winter offset. Handing them the arithmetic already done removes
+ * the guesswork.
+ *
+ * `fallbackZone` covers events stored in plain UTC, which carry no zone of
+ * their own; the workflow's timezone is the closest thing to the reader's.
+ */
+function formatLocalTime(time: any, tzid?: string, fallbackZone?: string): string {
+	if (time.isDate) return formatEventTime(time, tzid);
+	const zone =
+		tzid && isKnownZone(tzid)
+			? tzid
+			: fallbackZone && isKnownZone(fallbackZone)
+				? fallbackZone
+				: 'UTC';
+	const instant = instantOf(time, tzid);
+	const w = wallClockInZone(instant, zone);
+	const offset = zoneOffsetMinutes(instant, zone);
+	const sign = offset < 0 ? '-' : '+';
+	const abs = Math.abs(offset);
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return (
+		`${w.year}-${pad(w.month)}-${pad(w.day)}T${pad(w.hour)}:${pad(w.minute)}:${pad(w.second)}` +
+		`${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+	);
+}
+
 /**
  * Render a time for output: a bare calendar date for all-day events, and an
  * unambiguous UTC instant otherwise.
@@ -930,6 +985,7 @@ function toCalDavEvent(
 	etag: string | undefined,
 	raw: string,
 	times?: { start: any; end: any; recurrenceId?: any; tzid?: string },
+	localZone?: string,
 ): CalDavEvent {
 	const event = new ICAL.Event(vevent);
 	const tzid = times?.tzid ?? startTzid(vevent);
@@ -946,6 +1002,8 @@ function toCalDavEvent(
 		location: event.location ?? undefined,
 		start: start ? formatEventTime(start, tzid) : undefined,
 		end: end ? formatEventTime(end, tzid) : undefined,
+		startLocal: start ? formatLocalTime(start, tzid, localZone) : undefined,
+		endLocal: end ? formatLocalTime(end, tzid, localZone) : undefined,
 		allDay: start?.isDate ?? false,
 		timezone: tzid,
 		rrule: rruleProp ? rruleProp.getFirstValue()?.toString() : undefined,
@@ -963,7 +1021,12 @@ function toCalDavEvent(
  * Returns the series master for a recurring event; use expandCalendarObject
  * when you want the individual occurrences.
  */
-export function parseICalEvent(raw: string, url: string, etag?: string): CalDavEvent | null {
+export function parseICalEvent(
+	raw: string,
+	url: string,
+	etag?: string,
+	localZone?: string,
+): CalDavEvent | null {
 	try {
 		const comp = new ICAL.Component(ICAL.parse(raw));
 		const vevents = comp.getAllSubcomponents('vevent');
@@ -971,7 +1034,7 @@ export function parseICalEvent(raw: string, url: string, etag?: string): CalDavE
 		// Prefer the master. Taking the first component blindly would return an
 		// overridden instance when the server happens to serialise it first.
 		const master = vevents.find((v: any) => !v.hasProperty('recurrence-id')) ?? vevents[0];
-		return toCalDavEvent(master, url, etag, raw);
+		return toCalDavEvent(master, url, etag, raw, undefined, localZone);
 	} catch {
 		return null;
 	}
@@ -1018,6 +1081,7 @@ export function expandCalendarObject(
 	etag?: string,
 	rangeStart?: Date,
 	rangeEnd?: Date,
+	localZone?: string,
 ): CalDavEvent[] {
 	try {
 		const comp = new ICAL.Component(ICAL.parse(raw));
@@ -1030,14 +1094,14 @@ export function expandCalendarObject(
 		// An object can arrive holding only overrides when the server trims the
 		// series to what matched. Report them as standalone events.
 		if (!masters.length) {
-			return overrides.map((v: any) => toCalDavEvent(v, url, etag, raw));
+			return overrides.map((v: any) => toCalDavEvent(v, url, etag, raw, undefined, localZone));
 		}
 
 		const out: CalDavEvent[] = [];
 		for (const master of masters) {
 			const event = new ICAL.Event(master);
 			if (!rangeStart || !rangeEnd || !event.isRecurring()) {
-				out.push(toCalDavEvent(master, url, etag, raw));
+				out.push(toCalDavEvent(master, url, etag, raw, undefined, localZone));
 				continue;
 			}
 			for (const o of overrides) {
@@ -1068,7 +1132,9 @@ export function expandCalendarObject(
 						end: details.endDate,
 						recurrenceId: details.recurrenceId,
 						tzid,
-					}),
+					},
+					localZone,
+					),
 				);
 				if (++collected >= MAX_OCCURRENCES_PER_OBJECT) break;
 			}
@@ -1207,6 +1273,7 @@ export function parseCalendarQueryResponse(
 	serverUrl: string,
 	rangeStart?: Date,
 	rangeEnd?: Date,
+	localZone?: string,
 ): CalDavEvent[] {
 	const responses = extractResponses(xml);
 	const events: CalDavEvent[] = [];
@@ -1221,7 +1288,7 @@ export function parseCalendarQueryResponse(
 		if (!raw) continue;
 		const etag = (prop.getetag ?? '').toString().replace(/"/g, '');
 		const url = absoluteUrl(href, serverUrl || calendarUrl);
-		events.push(...expandCalendarObject(raw, url, etag || undefined, rangeStart, rangeEnd));
+		events.push(...expandCalendarObject(raw, url, etag || undefined, rangeStart, rangeEnd, localZone));
 	}
 	return events;
 }

@@ -164,6 +164,9 @@ async function collectEvents(
 				}))
 			: [{ url: calendarUrl, displayName: '' }];
 
+	// Events stored in plain UTC carry no zone of their own; the workflow's
+	// timezone is the closest thing to the reader's for rendering *Local.
+	const localZone = this.getTimezone();
 	const body = buildTimeRangeReport(rangeStart.toISOString(), rangeEnd.toISOString());
 	const collected: IDataObject[] = [];
 	for (const target of targets) {
@@ -178,6 +181,7 @@ async function collectEvents(
 				serverUrl,
 				rangeStart,
 				rangeEnd,
+				localZone,
 			);
 			for (const event of events) {
 				if (accept && !accept(event)) continue;
@@ -208,7 +212,7 @@ export class CalDav implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description:
-			'Read and write calendar events over CalDAV (Infomaniak, NextCloud, iCloud, Fastmail, Synology). Works as an AI Agent tool.',
+			'Read and write calendar events over CalDAV (Infomaniak, NextCloud, iCloud, Fastmail, Synology). Works as an AI Agent tool. Returned events carry two forms of each time: "startLocal"/"endLocal" are the event\'s own local time with its UTC offset already applied — use these to tell someone when an event is. "start"/"end" are UTC instants for sorting and arithmetic; do not convert them by hand.',
 		defaults: {
 			name: 'CalDAV',
 		},
@@ -386,7 +390,12 @@ export class CalDav implements INodeType {
 						const resp = await davRequest.call(this, 'GET', eventUrl, undefined, {
 							Accept: 'text/calendar',
 						});
-						const parsed = parseICalEvent(resp.body, eventUrl, (resp.headers.etag as string | undefined)?.replace(/"/g, ''));
+						const parsed = parseICalEvent(
+							resp.body,
+							eventUrl,
+							(resp.headers.etag as string | undefined)?.replace(/"/g, ''),
+							this.getTimezone(),
+						);
 						if (!parsed) {
 							throw new NodeApiError(
 								this.getNode(),

@@ -388,3 +388,93 @@ describe('broken VTIMEZONE from a real provider', () => {
 		expect(berlin.format(new Date(event.start!))).toBe('21:00');
 	});
 });
+
+describe('local time rendering', () => {
+	const timed = (dtstart: string, tzid?: string) =>
+		calendar(
+			'BEGIN:VEVENT',
+			'UID:t',
+			'DTSTAMP:20260101T000000Z',
+			tzid ? `DTSTART;TZID=${tzid}:${dtstart}` : `DTSTART:${dtstart}`,
+			tzid ? `DTEND;TZID=${tzid}:${dtstart}` : `DTEND:${dtstart}`,
+			'SUMMARY:S',
+			'END:VEVENT',
+		);
+
+	it('applies the offset in force on that date, not a fixed one', () => {
+		// Same wall clock, six months apart: Berlin is +02:00 in July and
+		// +01:00 in January. Getting this wrong is exactly what the agent did.
+		const summer = expandCalendarObject(timed('20260728T210000', 'Europe/Berlin'), URL)[0];
+		const winter = expandCalendarObject(timed('20260128T210000', 'Europe/Berlin'), URL)[0];
+		expect(summer.startLocal).toBe('2026-07-28T21:00:00+02:00');
+		expect(winter.startLocal).toBe('2026-01-28T21:00:00+01:00');
+	});
+
+	it('is the same instant as start', () => {
+		const [event] = expandCalendarObject(timed('20260728T210000', 'Europe/Berlin'), URL);
+		expect(new Date(event.startLocal!).getTime()).toBe(new Date(event.start!).getTime());
+	});
+
+	it('does not depend on the host timezone', () => {
+		const rendered = HOST_ZONES.map(
+			(host) =>
+				withTZ(host, () => expandCalendarObject(timed('20260728T210000', 'Europe/Berlin'), URL))[0]
+					.startLocal,
+		);
+		expect(new Set(rendered).size).toBe(1);
+	});
+
+	it('falls back to the given zone for an event stored in UTC', () => {
+		// A UTC event carries no zone of its own; the workflow's is the closest
+		// thing to the reader's.
+		const berlin = expandCalendarObject(timed('20260728T190000Z'), URL, undefined, undefined, undefined, 'Europe/Berlin');
+		const tokyo = expandCalendarObject(timed('20260728T190000Z'), URL, undefined, undefined, undefined, 'Asia/Tokyo');
+		expect(berlin[0].startLocal).toBe('2026-07-28T21:00:00+02:00');
+		expect(tokyo[0].startLocal).toBe('2026-07-29T04:00:00+09:00');
+	});
+
+	it('uses UTC when no zone is available at all', () => {
+		const [event] = expandCalendarObject(timed('20260728T190000Z'), URL);
+		expect(event.startLocal).toBe('2026-07-28T19:00:00+00:00');
+	});
+
+	it('leaves all-day events as bare dates', () => {
+		const allDay = calendar(
+			'BEGIN:VEVENT',
+			'UID:a',
+			'DTSTAMP:20260101T000000Z',
+			'DTSTART;VALUE=DATE:20260728',
+			'DTEND;VALUE=DATE:20260729',
+			'SUMMARY:S',
+			'END:VEVENT',
+		);
+		const [event] = expandCalendarObject(allDay, URL, undefined, undefined, undefined, 'Europe/Berlin');
+		expect(event.startLocal).toBe('2026-07-28');
+		expect(event.endLocal).toBe('2026-07-29');
+	});
+
+	it('renders the broken-VTIMEZONE event at the time it was meant to be', () => {
+		const [event] = expandCalendarObject(
+			calendar(
+				'BEGIN:VTIMEZONE',
+				'TZID:Europe/Berlin',
+				'BEGIN:STANDARD',
+				'DTSTART:20261025T010000',
+				'TZOFFSETTO:+0100',
+				'TZOFFSETFROM:+0200',
+				'RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU',
+				'END:STANDARD',
+				'END:VTIMEZONE',
+				'BEGIN:VEVENT',
+				'UID:pickup',
+				'DTSTAMP:20260101T000000Z',
+				'DTSTART;TZID=Europe/Berlin:20260728T210000',
+				'DTEND;TZID=Europe/Berlin:20260728T213000',
+				'SUMMARY:Penny pickup',
+				'END:VEVENT',
+			),
+			URL,
+		);
+		expect(event.startLocal).toBe('2026-07-28T21:00:00+02:00');
+	});
+});

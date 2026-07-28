@@ -51,6 +51,8 @@ interface Options {
 	writeFails?: string[];
 	/** iCalendar returned by GET on a single event resource. */
 	storedEvent?: string;
+	/** The workflow timezone the node reports via getTimezone(). */
+	timezone?: string;
 }
 
 /**
@@ -124,6 +126,7 @@ function makeContext(opts: Options) {
 		httpRequestWithAuthentication,
 		getInputData: () => Array.from({ length: opts.itemCount ?? 1 }, () => ({ json: {} })),
 		getNode: () => ({ name: 'CalDAV', type: 'calDav', typeVersion: 1, id: 'n1' }),
+		getTimezone: () => opts.timezone ?? 'Europe/Berlin',
 		getCredentials: async () => ({ serverUrl: SERVER, username: 'bob', password: 'p' }),
 		getNodeParameter: (name: string, _i: number, fallback?: unknown) =>
 			name in opts.params ? opts.params[name] : fallback,
@@ -547,5 +550,41 @@ describe('time window validation', () => {
 			params: { ...base, operation: 'getNext', calendar: WORK, lookaheadDays: 7 },
 		});
 		expect(items).toEqual([]);
+	});
+});
+
+describe('local time through the node', () => {
+	const utcEvent = {
+		[WORK]: [
+			{
+				href: '/calendars/bob/work/a.ics',
+				ics: calendarData(vevent('a', 'Standup', '20260728T190000Z', '20260728T193000Z')),
+			},
+		],
+	};
+	const params = {
+		...base,
+		operation: 'getAll',
+		calendar: WORK,
+		timeMin: '2026-07-01T00:00:00Z',
+		timeMax: '2026-08-01T00:00:00Z',
+	};
+
+	it('renders a UTC event in the workflow timezone', async () => {
+		const { items } = await run({ params, events: utcEvent, timezone: 'Europe/Berlin' });
+		expect(items[0].start).toBe('2026-07-28T19:00:00.000Z');
+		expect(items[0].startLocal).toBe('2026-07-28T21:00:00+02:00');
+	});
+
+	it('follows the workflow timezone wherever it points', async () => {
+		const { items } = await run({ params, events: utcEvent, timezone: 'Asia/Tokyo' });
+		expect(items[0].startLocal).toBe('2026-07-29T04:00:00+09:00');
+	});
+
+	it('keeps startLocal when simplified', async () => {
+		const { items } = await run({ params, events: utcEvent, timezone: 'Europe/Berlin' });
+		expect(items[0]).not.toHaveProperty('raw');
+		expect(items[0].startLocal).toBeDefined();
+		expect(items[0].endLocal).toBeDefined();
 	});
 });
