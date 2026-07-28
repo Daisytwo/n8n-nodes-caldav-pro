@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2]
+
+### Fixed
+
+- **Events with a TZID were read at the wrong time when the calendar object
+  carried a faulty VTIMEZONE.** Infomaniak's own importer writes
+  `TZID:Europe/Berlin` with US transition rules whose `RRULE`s contradict their
+  own `DTSTART`s. No observance then matches a summer date, ical.js falls back
+  to a zero offset, and every affected event is reported two hours late — a
+  21:00 pickup shows up as 23:00.
+
+  An IANA `TZID` is now resolved against the platform's timezone database
+  rather than the embedded VTIMEZONE, which is written by whichever tool
+  produced the event and is wrong often enough to matter. The embedded
+  definition remains the fallback for a `TZID` that names no IANA zone, such as
+  an Outlook-style `W. Europe Standard Time`.
+
+  Anything read from an affected calendar before this release was wrong by the
+  UTC offset in force at the event's date. Reads only — nothing this node wrote
+  was affected.
+
 ## [3.1.1]
 
 ### Fixed

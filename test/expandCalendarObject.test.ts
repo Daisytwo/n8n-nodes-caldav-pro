@@ -239,7 +239,7 @@ describe('time resolution', () => {
 		}
 	});
 
-	it('uses a VTIMEZONE when the object carries one', () => {
+	it('agrees with a correct VTIMEZONE, which is now only a fallback', () => {
 		const withVtimezone = calendar(
 			'BEGIN:VTIMEZONE',
 			'TZID:Europe/Berlin',
@@ -328,5 +328,63 @@ describe('parseICalEvent', () => {
 			'END:VEVENT',
 		);
 		expect(parseICalEvent(overrideFirst, URL)?.summary).toBe('The master');
+	});
+});
+
+describe('broken VTIMEZONE from a real provider', () => {
+	// Taken verbatim from an event written by Infomaniak's own importer: the
+	// TZID says Europe/Berlin, but the transition rules are the US ones, and
+	// each RRULE contradicts its own DTSTART. No observance matches a July
+	// date, so ical.js resolves the offset to zero and every summer event
+	// lands two hours late.
+	const infomaniakImport = calendar(
+		'BEGIN:VTIMEZONE',
+		'TZID:Europe/Berlin',
+		'BEGIN:STANDARD',
+		'DTSTART:20261025T010000',
+		'TZOFFSETTO:+0100',
+		'TZOFFSETFROM:+0200',
+		'RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU',
+		'END:STANDARD',
+		'BEGIN:DAYLIGHT',
+		'DTSTART:20260329T010000',
+		'TZOFFSETTO:+0200',
+		'TZOFFSETFROM:+0100',
+		'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU',
+		'END:DAYLIGHT',
+		'END:VTIMEZONE',
+		'BEGIN:VEVENT',
+		'UID:pickup',
+		'DTSTAMP:20260101T000000Z',
+		'DTSTART;TZID=Europe/Berlin:20260728T210000',
+		'DTEND;TZID=Europe/Berlin:20260728T213000',
+		'SUMMARY:Penny pickup',
+		'END:VEVENT',
+	);
+
+	it('uses the IANA definition rather than the broken one', () => {
+		for (const host of HOST_ZONES) {
+			const [event] = withTZ(host, () => expandCalendarObject(infomaniakImport, URL));
+			// 21:00 in Berlin on 28 July is CEST, so 19:00Z — not the 21:00Z the
+			// embedded VTIMEZONE would produce.
+			expect(event.start).toBe('2026-07-28T19:00:00.000Z');
+			expect(event.end).toBe('2026-07-28T19:30:00.000Z');
+		}
+	});
+
+	it('still reports the timezone it was stored under', () => {
+		const [event] = expandCalendarObject(infomaniakImport, URL);
+		expect(event.timezone).toBe('Europe/Berlin');
+	});
+
+	it('reads back as the intended local time', () => {
+		const [event] = expandCalendarObject(infomaniakImport, URL);
+		const berlin = new Intl.DateTimeFormat('en-GB', {
+			timeZone: 'Europe/Berlin',
+			hour: '2-digit',
+			minute: '2-digit',
+			hourCycle: 'h23',
+		});
+		expect(berlin.format(new Date(event.start!))).toBe('21:00');
 	});
 });

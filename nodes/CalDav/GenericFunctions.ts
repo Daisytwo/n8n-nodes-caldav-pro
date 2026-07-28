@@ -565,17 +565,22 @@ function wallClockToInstant(w: WallClock, tz: string): Date {
 /**
  * The absolute instant an ICAL.Time refers to.
  *
- * ICAL.Time.toJSDate() is only trustworthy once the zone resolved; for a
- * floating time it silently reinterprets the wall clock in the host's zone.
- * `tzid` is the TZID parameter as written on the property, used to recover the
- * real instant in exactly that case.
+ * When the TZID names an IANA zone, that definition wins over any VTIMEZONE
+ * the object carries. VTIMEZONE components are written by whichever tool
+ * produced the event and are wrong often enough to matter: Infomaniak's own
+ * importer emits `TZID:Europe/Berlin` with US transition rules whose RRULEs
+ * contradict their own DTSTARTs, so no observance matches and ical.js falls
+ * back to a zero offset — putting every summer event two hours late. The
+ * platform's tz database has no such problem, and also carries correct
+ * historical rules that embedded definitions usually omit.
+ *
+ * The VTIMEZONE is still the best source for a TZID we cannot map, such as an
+ * Outlook-style "W. Europe Standard Time".
  */
 function instantOf(time: any, tzid?: string): Date {
 	if (time.isDate) {
 		return new Date(Date.UTC(time.year, time.month - 1, time.day));
 	}
-	const zone = time.zone?.tzid;
-	if (zone && zone !== 'floating') return time.toJSDate();
 	if (tzid && isKnownZone(tzid)) {
 		return wallClockToInstant(
 			{
@@ -589,9 +594,9 @@ function instantOf(time: any, tzid?: string): Date {
 			tzid,
 		);
 	}
-	// Genuinely floating, or a TZID we can't map (e.g. an Outlook-style
-	// "W. Europe Standard Time" with no VTIMEZONE). Host-local is the best
-	// remaining reading.
+	// A non-IANA TZID with a VTIMEZONE ical.js could resolve, or a plain UTC
+	// value. Failing both, the time is genuinely floating and host-local is the
+	// only reading left.
 	return time.toJSDate();
 }
 
