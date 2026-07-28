@@ -28,6 +28,8 @@ const {
 	parseICalEvent,
 	resolveEventUrl,
 	seriesRecurrenceRule,
+	patchOccurrence,
+	removeOccurrence,
 	eventMatchesText,
 } = require('./dist/nodes/CalDav/GenericFunctions');
 
@@ -394,6 +396,57 @@ async function main() {
 		seriesRecurrenceRule((await rawRequest('GET', seedUrl, undefined, { Accept: 'text/calendar' })).body) ===
 			undefined,
 	);
+
+	// Single-occurrence edits rewrite the series resource, so the server has to
+	// accept the result and hand it back expanded the way we expect.
+	const reloadSeries = async () => {
+		const resp = await rawRequest('GET', seriesUrl, undefined, { Accept: 'text/calendar' });
+		return {
+			ics: resp.body,
+			etag: (resp.headers.etag || '').replace(/"/g, ''),
+			list: (await report(sUrl, now, new Date(now.getTime() + 40 * DAY))).filter(
+				(e) => e.uid === seriesUid,
+			),
+		};
+	};
+
+	let state = await reloadSeries();
+	const movedSlot = state.list[1].recurrenceId;
+	const movedTo = new Date(new Date(state.list[1].start).getTime() + 5 * 60 * MINUTE);
+	const moveResp = await put(
+		seriesUrl,
+		patchOccurrence(state.ics, movedSlot, {
+			summary: `Smoke Test Event - moved-${tag}`,
+			start: movedTo.toISOString(),
+			end: new Date(movedTo.getTime() + 30 * MINUTE).toISOString(),
+		}),
+		state.etag ? { 'If-Match': `"${state.etag}"` } : undefined,
+	);
+	check(`moving one occurrence accepted (${moveResp.statusCode})`, moveResp.statusCode < 300, moveResp.body.slice(0, 120));
+
+	state = await reloadSeries();
+	check('the series still has four occurrences', state.list.length === 4, `got ${state.list.length}`);
+	check(
+		'only the targeted occurrence moved',
+		state.list.filter((e) => e.summary.includes(`moved-${tag}`)).length === 1,
+	);
+	check('it moved to the requested time', state.list.some((e) => e.start === toSecond(movedTo)));
+
+	const cancelledSlot = state.list[2].recurrenceId;
+	const cancelResp = await put(
+		seriesUrl,
+		removeOccurrence(state.ics, cancelledSlot),
+		state.etag ? { 'If-Match': `"${state.etag}"` } : undefined,
+	);
+	check(`cancelling one occurrence accepted (${cancelResp.statusCode})`, cancelResp.statusCode < 300, cancelResp.body.slice(0, 120));
+
+	state = await reloadSeries();
+	check('one occurrence fewer', state.list.length === 3, `got ${state.list.length}`);
+	check(
+		'the cancelled slot is gone',
+		!state.list.some((e) => e.recurrenceId === cancelledSlot),
+	);
+	check('the moved one survived the cancellation', state.list.some((e) => e.summary.includes(`moved-${tag}`)));
 
 	/* [6] Move. */
 	console.log('\n[6] Move between calendars');

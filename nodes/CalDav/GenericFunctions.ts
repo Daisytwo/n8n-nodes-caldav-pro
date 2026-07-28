@@ -879,13 +879,8 @@ export interface PatchEventInput {
  * Rebuilding the event from scratch, as an earlier version did, dropped all of
  * those plus any field the caller left blank.
  */
-export function patchICalEvent(raw: string, patch: PatchEventInput): string {
-	const comp = new ICAL.Component(ICAL.parse(raw));
-	const vevent = comp.getFirstSubcomponent('vevent');
-	if (!vevent) {
-		throw new Error('The stored calendar resource contains no VEVENT — refusing to overwrite it.');
-	}
-
+/** Apply the patch's fields to one VEVENT, leaving anything it omits alone. */
+function applyPatchFields(vevent: any, patch: PatchEventInput) {
 	if (patch.start !== undefined || patch.end !== undefined) {
 		if (patch.start === undefined || patch.end === undefined) {
 			throw new Error('Start and End must be updated together.');
@@ -918,19 +913,37 @@ export function patchICalEvent(raw: string, patch: PatchEventInput): string {
 			patch.summary ?? (vevent.getFirstPropertyValue('summary') as string | null) ?? 'Reminder';
 		setReminders(vevent, patch.reminders, String(label));
 	}
+}
 
-	// RFC 5545: SEQUENCE must increase on every change that attendees should
-	// see, otherwise clients may treat the update as a stale duplicate.
+/**
+ * Mark a component as changed. RFC 5545: SEQUENCE must increase on every change
+ * attendees should see, or clients may treat the update as a stale duplicate.
+ */
+function bumpRevision(vevent: any) {
 	const seq = Number(vevent.getFirstPropertyValue('sequence') ?? 0);
 	vevent.updatePropertyWithValue('sequence', (Number.isFinite(seq) ? seq : 0) + 1);
-
 	for (const name of ['dtstamp', 'last-modified']) {
 		vevent.removeAllProperties(name);
 		const prop = new ICAL.Property(name, vevent);
 		prop.setValue(utcNow());
 		vevent.addProperty(prop);
 	}
+}
 
+/** The series master: the VEVENT that carries no RECURRENCE-ID. */
+function masterOf(comp: any): any {
+	const vevents = comp.getAllSubcomponents('vevent');
+	return vevents.find((v: any) => !v.hasProperty('recurrence-id')) ?? vevents[0];
+}
+
+export function patchICalEvent(raw: string, patch: PatchEventInput): string {
+	const comp = new ICAL.Component(ICAL.parse(raw));
+	const vevent = comp.getFirstSubcomponent('vevent');
+	if (!vevent) {
+		throw new Error('The stored calendar resource contains no VEVENT — refusing to overwrite it.');
+	}
+	applyPatchFields(vevent, patch);
+	bumpRevision(vevent);
 	return `${comp.toString()}\r\n`;
 }
 
@@ -1038,6 +1051,128 @@ export function parseICalEvent(
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Find the slot a `recurrenceId` names, as the series itself generates it.
+ *
+ * The value has to come from the rule rather than from the caller's string:
+ * an overridden instance may have been moved, and EXDATE and RECURRENCE-ID
+ * must both carry the *original* slot, not where the event ended up.
+ */
+function findOccurrence(master: any, tzid: string | undefined, recurrenceId: string): any | null {
+	const event = new ICAL.Event(master);
+	if (!event.isRecurring()) return null;
+	const target = new Date(recurrenceId).getTime();
+	const iterator = event.iterator();
+	let next: any;
+	let iterations = 0;
+	while ((next = iterator.next())) {
+		if (++iterations > MAX_ITERATIONS_PER_OBJECT) break;
+		if (formatEventTime(next, tzid) === recurrenceId) return next;
+		// The iterator is ordered, so once we are past the target it is not here.
+		if (!Number.isNaN(target) && instantOf(next, tzid).getTime() > target) break;
+	}
+	return null;
+}
+
+/** Copy DTSTART's storage form onto another date property. */
+function dateLike(name: string, source: any, value: any, owner: any): any {
+	const prop = new ICAL.Property(name, owner);
+	const isDate = source?.type === 'date';
+	if (isDate) prop.resetType('date');
+	prop.setValue(value);
+	const tzid = source?.getParameter('tzid');
+	if (!isDate && tzid) prop.setParameter('tzid', tzid);
+	return prop;
+}
+
+/**
+ * Remove a single occurrence from a series by excluding its slot.
+ *
+ * The whole series lives in one resource under one UID, so a single occurrence
+ * cannot be deleted on its own — it is cancelled by adding its slot to EXDATE.
+ * Any override previously written for that slot goes too, or it would linger as
+ * an orphan the server still returns.
+ */
+export function removeOccurrence(raw: string, recurrenceId: string): string {
+	const comp = new ICAL.Component(ICAL.parse(raw));
+	const master = masterOf(comp);
+	if (!master) throw new Error('The stored calendar resource contains no VEVENT.');
+	const dtstart = master.getFirstProperty('dtstart');
+	const tzid = dtstart?.getParameter('tzid') as string | undefined;
+
+	const slot = findOccurrence(master, tzid, recurrenceId);
+	if (!slot) {
+		throw new Error(
+			`No occurrence of this series starts at ${recurrenceId}. Use the "recurrenceId" value from a read operation.`,
+		);
+	}
+
+	master.addProperty(dateLike('exdate', dtstart, slot, master));
+
+	for (const override of comp.getAllSubcomponents('vevent')) {
+		if (!override.hasProperty('recurrence-id')) continue;
+		const rid = override.getFirstProperty('recurrence-id')?.getFirstValue();
+		if (formatEventTime(rid, tzid) === recurrenceId) comp.removeSubcomponent(override);
+	}
+
+	bumpRevision(master);
+	return `${comp.toString()}\r\n`;
+}
+
+/**
+ * Change a single occurrence by writing a RECURRENCE-ID override beside the
+ * master, or updating the override already there.
+ *
+ * A new override starts as a copy of the master so the occurrence keeps the
+ * series' details, minus the recurrence properties themselves — an override
+ * that carried the RRULE would define a second series.
+ */
+export function patchOccurrence(
+	raw: string,
+	recurrenceId: string,
+	patch: PatchEventInput,
+): string {
+	const comp = new ICAL.Component(ICAL.parse(raw));
+	const master = masterOf(comp);
+	if (!master) throw new Error('The stored calendar resource contains no VEVENT.');
+	const dtstart = master.getFirstProperty('dtstart');
+	const tzid = dtstart?.getParameter('tzid') as string | undefined;
+
+	let override = comp
+		.getAllSubcomponents('vevent')
+		.find(
+			(v: any) =>
+				v.hasProperty('recurrence-id') &&
+				formatEventTime(v.getFirstProperty('recurrence-id')?.getFirstValue(), tzid) ===
+					recurrenceId,
+		);
+
+	if (!override) {
+		const slot = findOccurrence(master, tzid, recurrenceId);
+		if (!slot) {
+			throw new Error(
+				`No occurrence of this series starts at ${recurrenceId}. Use the "recurrenceId" value from a read operation.`,
+			);
+		}
+		override = new ICAL.Component(ICAL.parse(master.toString()));
+		for (const name of ['rrule', 'rdate', 'exdate']) override.removeAllProperties(name);
+		override.addProperty(dateLike('recurrence-id', dtstart, slot, override));
+
+		// Start the override at the slot the rule generated, keeping the series'
+		// duration, so a patch that only changes the title leaves the time alone.
+		const details = new ICAL.Event(master).getOccurrenceDetails(slot);
+		override.removeAllProperties('dtstart');
+		override.removeAllProperties('dtend');
+		override.addProperty(dateLike('dtstart', dtstart, details.startDate, override));
+		override.addProperty(dateLike('dtend', dtstart, details.endDate, override));
+		comp.addSubcomponent(override);
+	}
+
+	applyPatchFields(override, patch);
+	bumpRevision(override);
+	return `${comp.toString()}\r\n`;
 }
 
 /**

@@ -588,3 +588,100 @@ describe('local time through the node', () => {
 		expect(items[0].endLocal).toBeDefined();
 	});
 });
+
+describe('single occurrence through the node', () => {
+	const series = calendarData(
+		vevent(
+			'jf',
+			'Jour fixe',
+			'20260406T100000Z',
+			'20260406T110000Z',
+			'RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4',
+		),
+	);
+	const secondSlot = '2026-04-13T10:00:00.000Z';
+
+	it('cancels one date with a PUT, not a DELETE', async () => {
+		// The whole series lives in one resource; deleting the resource would
+		// take every occurrence with it.
+		const { items, ctx } = await run({
+			params: {
+				resource: 'event',
+				operation: 'delete',
+				calendar: WORK,
+				uid: 'jf',
+				recurrenceId: secondSlot,
+			},
+			storedEvent: series,
+		});
+		expect(ctx.requests.filter((r) => r.method === 'DELETE')).toHaveLength(0);
+		expect(ctx.requests.filter((r) => r.method === 'PUT')).toHaveLength(1);
+		expect(items[0].deleted).toBe(true);
+		expect(items[0].recurrenceId).toBe(secondSlot);
+	});
+
+	it('sends the series back with that date excluded', async () => {
+		const seen: any[] = [];
+		const ctx = makeContext({
+			params: {
+				resource: 'event',
+				operation: 'delete',
+				calendar: WORK,
+				uid: 'jf',
+				recurrenceId: secondSlot,
+			},
+			storedEvent: series,
+		});
+		const original = ctx.helpers.httpRequestWithAuthentication;
+		ctx.helpers.httpRequestWithAuthentication = (async (cred: string, o: any) => {
+			seen.push(o);
+			return original(cred, o);
+		}) as any;
+		await new CalDav().execute.call(ctx as any);
+		const put = seen.find((o) => o.method === 'PUT');
+		expect(put.body).toContain('EXDATE');
+		expect(put.headers['If-Match']).toBe('"stored-1"');
+	});
+
+	it('does not need Entire Series when an occurrence is named', async () => {
+		await expect(
+			run({
+				params: {
+					resource: 'event',
+					operation: 'update',
+					calendar: WORK,
+					uid: 'jf',
+					recurrenceId: secondSlot,
+					summary: 'Moved',
+					start: '2026-04-13T14:00:00Z',
+					end: '2026-04-13T15:00:00Z',
+				},
+				storedEvent: series,
+			}),
+		).resolves.toBeDefined();
+	});
+
+	it('still demands a decision when neither is given', async () => {
+		await expect(
+			run({
+				params: { resource: 'event', operation: 'delete', calendar: WORK, uid: 'jf' },
+				storedEvent: series,
+			}),
+		).rejects.toThrow(/recurring series/);
+	});
+
+	it('reports an occurrence that does not exist', async () => {
+		await expect(
+			run({
+				params: {
+					resource: 'event',
+					operation: 'delete',
+					calendar: WORK,
+					uid: 'jf',
+					recurrenceId: '2026-04-14T10:00:00.000Z',
+				},
+				storedEvent: series,
+			}),
+		).rejects.toThrow(/No occurrence of this series starts at/);
+	});
+});

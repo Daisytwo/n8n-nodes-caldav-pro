@@ -17,6 +17,7 @@ This node gives n8n a full CRUD interface to CalDAV calendars. In practical term
 - **Expand recurring series** — a weekly meeting is returned as the individual occurrences that fall inside your window, with `EXDATE` exclusions and moved instances (`RECURRENCE-ID`) applied.
 - **Update events** — change time, location, reminders, attendees. Updates are applied as a patch: fields you don't supply keep their stored value, including properties this node doesn't model (categories, organiser, custom `X-` properties).
 - **Delete events** by UID or URL.
+- **Change or cancel a single occurrence** of a recurring series — pass the `recurrenceId` a read returned. Cancelling adds an `EXDATE`; changing writes a `RECURRENCE-ID` override. The rest of the series is untouched.
 - **Address events written by other clients** — Get / Update / Delete / Move accept either the event's URL (as returned by every read operation) or its UID, which is resolved against the server. Events created in Thunderbird, Apple Calendar, or a web UI are stored under a filename the server chose, not under their UID.
 - **Round-trip iCalendar** — events you write come back correctly parsed, including RRULE, TZID, and alarms.
 - **Use it as an AI Agent tool** — every field has an LLM-readable description with examples, so an agent can call it cold and get it right on the first try.
@@ -246,7 +247,7 @@ not against a live server.
 2. **No Free/Busy** (`calendar-availability`) — only the basic `calendar-query` REPORT.
 3. **No attachments** (VEVENT ATTACH property).
 4. **No scheduling / RSVP** — attendees are written as ATTENDEE lines, but no server-side `METHOD:REQUEST` invitation email is triggered.
-5. **Recurrence is per-series, not per-occurrence** — reads expand a series into its occurrences, but all occurrences share one UID and one URL. Deleting or updating by UID therefore affects the whole series; there is no way to change a single occurrence. Because that is rarely what the caller means, Delete and Update refuse to touch a recurring event unless **Entire Series** is switched on.
+5. **A recurring series lives in one resource** — every occurrence shares one UID and one URL. Delete and Update therefore refuse to touch a recurring event unless you say which: set **Occurrence** to a `recurrenceId` for a single date, or **Entire Series** for all of them.
 6. **No `VTIMEZONE` is written** — events are stored with a `TZID` parameter but without the matching `VTIMEZONE` component. Clients resolve IANA identifiers from their own database, so this works in practice, but it is not strictly RFC 5545 compliant.
 
 ## Built with AI

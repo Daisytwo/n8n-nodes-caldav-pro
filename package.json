@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-caldav-pro",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "n8n community node for CalDAV calendars (Infomaniak, NextCloud, iCloud, Fastmail). Usable as AI Agent tool.",
   "keywords": [
     "n8n-community-node-package",

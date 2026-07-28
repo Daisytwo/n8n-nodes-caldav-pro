@@ -16,6 +16,8 @@ import {
 	discoverCalendars,
 	buildICalEvent,
 	patchICalEvent,
+	patchOccurrence,
+	removeOccurrence,
 	buildTimeRangeReport,
 	parseCalendarQueryResponse,
 	parseICalEvent,
@@ -80,7 +82,7 @@ function guardRecurringSeries(
 		{
 			itemIndex,
 			description:
-				'Turn on "Entire Series" to confirm that is what you want. Changing or removing a single occurrence is not supported yet — all occurrences share one UID and one resource on the server.',
+				'Set "Occurrence" to a recurrenceId from a read operation to act on that one date only, or turn on "Entire Series" to affect all of them.',
 		},
 	);
 }
@@ -547,10 +549,11 @@ export class CalDav implements INodeType {
 							}
 							throw err;
 						}
-						guardRecurringSeries.call(this, existing.body, i, 'update');
+						const occurrence = (this.getNodeParameter('recurrenceId', i, '') as string).trim();
+						if (!occurrence) guardRecurringSeries.call(this, existing.body, i, 'update');
 						const currentEtag = (existing.headers.etag as string | undefined)?.replace(/"/g, '');
 
-						const iCal = patchICalEvent(existing.body, {
+						const patch = {
 							summary,
 							start,
 							end,
@@ -561,7 +564,17 @@ export class CalDav implements INodeType {
 							rrule: additional.rrule as string | undefined,
 							attendees: attendeesRaw,
 							reminders: remindersRaw,
-						});
+						};
+						let iCal;
+						try {
+							iCal = occurrence
+								? patchOccurrence(existing.body, occurrence, patch)
+								: patchICalEvent(existing.body, patch);
+						} catch (err) {
+							throw new NodeOperationError(this.getNode(), (err as Error).message, {
+								itemIndex: i,
+							});
+						}
 
 						const putHeaders: Record<string, string> = {
 							'Content-Type': 'text/calendar; charset=utf-8',
@@ -589,7 +602,16 @@ export class CalDav implements INodeType {
 						}
 						const etag = (resp.headers.etag as string | undefined)?.replace(/"/g, '');
 						returnData.push({
-							json: { uid, url: eventUrl, etag, summary, start, end, updated: true },
+							json: {
+								uid,
+								url: eventUrl,
+								etag,
+								summary,
+								start,
+								end,
+								recurrenceId: occurrence || undefined,
+								updated: true,
+							},
 							pairedItem: { item: i },
 						});
 					} else if (operation === 'delete') {
@@ -613,9 +635,36 @@ export class CalDav implements INodeType {
 							}
 							throw err;
 						}
-						guardRecurringSeries.call(this, stored.body, i, 'delete');
-
 						const storedEtag = (stored.headers.etag as string | undefined)?.replace(/"/g, '');
+						const occurrence = (this.getNodeParameter('recurrenceId', i, '') as string).trim();
+
+						// Cancelling one date of a series is not a DELETE: the whole
+						// series lives in this one resource, so the occurrence is
+						// excluded and the resource written back.
+						if (occurrence) {
+							let excluded;
+							try {
+								excluded = removeOccurrence(stored.body, occurrence);
+							} catch (err) {
+								throw new NodeOperationError(this.getNode(), (err as Error).message, {
+									itemIndex: i,
+								});
+							}
+							const headers: Record<string, string> = {
+								'Content-Type': 'text/calendar; charset=utf-8',
+							};
+							if (storedEtag) headers['If-Match'] = `"${storedEtag}"`;
+							await davRequest
+								.call(this, 'PUT', eventUrl, excluded, headers)
+								.catch((err) => rethrowWriteError.call(this, err, i, calUrlNormalised));
+							returnData.push({
+								json: { uid, url: eventUrl, recurrenceId: occurrence, deleted: true },
+								pairedItem: { item: i },
+							});
+							continue;
+						}
+
+						guardRecurringSeries.call(this, stored.body, i, 'delete');
 						try {
 							await davRequest.call(
 								this,

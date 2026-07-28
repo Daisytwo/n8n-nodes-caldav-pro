@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0]
+
+### Added
+
+- **Single occurrences of a recurring series can be changed and cancelled.**
+  Set **Occurrence** on Delete or Update to a `recurrenceId` from a read, and
+  only that date is affected.
+
+  A series has no per-occurrence resource to address: every occurrence shares
+  one UID and one URL. Cancelling therefore adds the slot to `EXDATE` and
+  writes the series back — a `PUT`, not a `DELETE`, since deleting the resource
+  would take the whole series. Changing writes a `RECURRENCE-ID` override
+  beside the master, seeded from it so the occurrence keeps the series' details,
+  minus the recurrence properties an override must not carry.
+
+  Both anchor on the slot the rule generated rather than on where an occurrence
+  was moved to, so a moved occurrence can still be cancelled afterwards — and
+  cancelling removes any override for that slot instead of orphaning it.
+
+### Changed
+
+- The guard added in 3.1.0 now points at both ways out: name an occurrence, or
+  confirm the whole series.
+
 ## [3.2.0]
 
 ### Added

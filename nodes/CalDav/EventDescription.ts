@@ -116,6 +116,21 @@ export const eventFields: INodeProperties[] = [
 		},
 	},
 	{
+		displayName: 'Occurrence',
+		name: 'recurrenceId',
+		type: 'string',
+		default: '',
+		placeholder: '2026-04-13T08:00:00.000Z',
+		description:
+			'Act on one occurrence of a recurring event instead of the whole series. Pass the "recurrenceId" value exactly as a read operation returned it for that occurrence. Deleting cancels just that date; updating moves or changes just that one, leaving the rest of the series alone. Leave empty for a non-recurring event, or to act on a whole series together with "Entire Series".',
+		displayOptions: {
+			show: {
+				resource: ['event'],
+				operation: ['delete', 'update'],
+			},
+		},
+	},
+	{
 		displayName: 'Entire Series',
 		name: 'entireSeries',
 		type: 'boolean',
