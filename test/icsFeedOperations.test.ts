@@ -388,16 +388,16 @@ describe('ICS feed — the feed address never reaches the output', () => {
 describe('ICS feed — node description', () => {
 	const description = new CalDav().description;
 
-	it('requires the CalDAV credential only for the CalDAV resources', () => {
+	it('does not require a CalDAV account in the editor for a feed', () => {
 		const calDav = description.credentials?.find((c) => c.name === 'calDavApi');
-		expect(calDav?.required).toBe(true);
-		expect(calDav?.displayOptions?.show?.resource).toEqual(['calendar', 'event']);
+		expect(calDav?.required).toBe(false);
+		expect(calDav?.displayOptions).toBeUndefined();
 	});
 
-	it('requires the ICS credential only for the feed resource', () => {
+	it('makes the ICS credential selectable without resource gating', () => {
 		const feedCredential = description.credentials?.find((c) => c.name === 'icsFeedApi');
-		expect(feedCredential?.required).toBe(true);
-		expect(feedCredential?.displayOptions?.show?.resource).toEqual(['icsFeed']);
+		expect(feedCredential?.required).toBe(false);
+		expect(feedCredential?.displayOptions).toBeUndefined();
 	});
 
 	it('offers only read operations on the feed resource', () => {

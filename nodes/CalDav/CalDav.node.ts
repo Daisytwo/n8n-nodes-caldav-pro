@@ -42,6 +42,23 @@ import { calendarOperations, calendarFields } from './CalendarDescription';
 import { eventOperations, eventFields } from './EventDescription';
 import { icsFeedOperations, icsFeedFields } from './IcsFeedDescription';
 
+/** Optional editor credentials still have to be configured for the active resource. */
+async function requireResourceCredentials(
+	this: IExecuteFunctions | ILoadOptionsFunctions,
+	name: 'calDavApi' | 'icsFeedApi',
+): Promise<IDataObject> {
+	const credentials = await this.getCredentials(name);
+	const fields = name === 'calDavApi' ? ['serverUrl', 'username', 'password'] : ['feedUrl'];
+	if (fields.some((field) => typeof credentials?.[field] !== 'string' || !credentials[field])) {
+		const label = name === 'calDavApi' ? 'CalDAV API' : 'ICS Feed API';
+		throw new NodeOperationError(
+			this.getNode(),
+			`${label} credential is required. Select and configure it for this resource.`,
+		);
+	}
+	return credentials;
+}
+
 /**
  * Explain a 403 from a write instead of passing "Forbidden" through.
  *
@@ -332,27 +349,15 @@ export class CalDav implements INodeType {
 		inputs: ['main'],
 		outputs: ['main'],
 		credentials: [
-			// Each credential is required only for the resource that uses it. An ICS
-			// feed is fetched unauthenticated, so demanding a CalDAV account before a
-			// public holiday calendar can be read would be both pointless and an
-			// invitation to aim that account at somebody else's server.
+			// Keep credential selection independent of resource in the editor's setup
+			// view. The active resource requires its own credential at runtime.
 			{
 				name: 'calDavApi',
-				required: true,
-				displayOptions: {
-					show: {
-						resource: ['calendar', 'event'],
-					},
-				},
+				required: false,
 			},
 			{
 				name: 'icsFeedApi',
-				required: true,
-				displayOptions: {
-					show: {
-						resource: ['icsFeed'],
-					},
-				},
+				required: false,
 			},
 		],
 		properties: [
@@ -380,7 +385,9 @@ export class CalDav implements INodeType {
 	methods = {
 		loadOptions: {
 			async getCalendars(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const creds = await this.getCredentials('calDavApi');
+				// A stale dropdown request must not access CalDAV credentials for a feed.
+				if (this.getNodeParameter('resource') === 'icsFeed') return [];
+				const creds = await requireResourceCredentials.call(this, 'calDavApi');
 				const serverUrl = creds.serverUrl as string;
 				const username = creds.username as string;
 				const calendars = await discoverCalendars.call(this, serverUrl, username);
@@ -431,12 +438,15 @@ export class CalDav implements INodeType {
 		// feed configured, and would put an account's password one mistake away
 		// from a request aimed at an external host.
 		const creds: IDataObject =
-			resource === 'icsFeed' ? {} : ((await this.getCredentials('calDavApi')) as IDataObject);
+			resource === 'icsFeed' ? {} : await requireResourceCredentials.call(this, 'calDavApi');
 		// Unlike node parameters, credentials do not vary per input item. Read the
 		// secret once so multiple input items still issue only one credential lookup.
 		const feedCreds =
 			resource === 'icsFeed'
-				? ((await this.getCredentials('icsFeedApi')) as { feedUrl?: string; feedName?: string })
+				? ((await requireResourceCredentials.call(this, 'icsFeedApi')) as {
+						feedUrl?: string;
+						feedName?: string;
+					})
 				: undefined;
 		const serverUrl = creds.serverUrl as string;
 		const username = creds.username as string;

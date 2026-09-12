@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CalDav } from '../nodes/CalDav/CalDav.node';
 
+describe('calendar dropdown credentials', () => {
+	it.each(['calendar', 'event'])('loads calendars for %s with only CalDAV credentials', async (resource) => {
+		const ctx = makeContext({ params: { resource } });
+		const originalGetCredentials = ctx.getCredentials;
+		const getCredentials = vi.fn(async (name: string) => {
+			if (name !== 'calDavApi') throw new Error('ICS credentials must not be read');
+			return originalGetCredentials();
+		});
+		const options = await new CalDav().methods.loadOptions.getCalendars.call({ ...ctx, getCredentials } as any);
+		expect(options.map((option) => option.value)).toEqual(['__DEFAULT__', '__ALL__', WORK, HOME]);
+		expect(getCredentials).toHaveBeenCalledWith('calDavApi');
+	});
+});
+
 const SERVER = 'https://dav.example.com/';
 const WORK = 'https://dav.example.com/calendars/bob/work/';
 const HOME = 'https://dav.example.com/calendars/bob/home/';

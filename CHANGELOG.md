@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.5.1]
+
+### Fixed
+
+- Keep credential selection independent of Resource in the editor so selecting
+  CalDAV credentials no longer switches Event actions to External ICS Feed (#4).
+- Require the active resource's configured credential before execution or calendar
+  discovery, while leaving unrelated credentials unread. Stale calendar dropdown
+  requests for an External ICS Feed return no options without accessing CalDAV.
+
+## [3.5.0]
+
 ### Added
 
 - **External ICS Feed** read-only resource for subscribed `https://`, `webcal://`,
