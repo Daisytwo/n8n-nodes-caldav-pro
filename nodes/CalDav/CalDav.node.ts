@@ -10,6 +10,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 import { randomUUID } from 'crypto';
+import { calendarDiagnostic } from './CalendarDiagnostics';
 
 import {
 	absoluteUrl,
@@ -42,6 +43,12 @@ import { calendarOperations, calendarFields } from './CalendarDescription';
 import { eventOperations, eventFields } from './EventDescription';
 import { icsFeedOperations, icsFeedFields } from './IcsFeedDescription';
 
+/** Both the runtime check and the dropdown's sanitised fallback say this. */
+function credentialRequiredMessage(name: 'calDavApi' | 'icsFeedApi'): string {
+	const label = name === 'calDavApi' ? 'CalDAV API' : 'ICS Feed API';
+	return `${label} credential is required. Select and configure it for this resource.`;
+}
+
 /** Optional editor credentials still have to be configured for the active resource. */
 async function requireResourceCredentials(
 	this: IExecuteFunctions | ILoadOptionsFunctions,
@@ -50,11 +57,7 @@ async function requireResourceCredentials(
 	const credentials = await this.getCredentials(name);
 	const fields = name === 'calDavApi' ? ['serverUrl', 'username', 'password'] : ['feedUrl'];
 	if (fields.some((field) => typeof credentials?.[field] !== 'string' || !credentials[field])) {
-		const label = name === 'calDavApi' ? 'CalDAV API' : 'ICS Feed API';
-		throw new NodeOperationError(
-			this.getNode(),
-			`${label} credential is required. Select and configure it for this resource.`,
-		);
+		throw new NodeOperationError(this.getNode(), credentialRequiredMessage(name));
 	}
 	return credentials;
 }
@@ -373,6 +376,25 @@ export class CalDav implements INodeType {
 				],
 				default: 'event',
 			},
+			// Both credentials stay selectable for every resource — gating them by
+			// resource is what n8n mistakes for an auth switch (issue #4). These
+			// notices say which one the selected resource actually reads instead.
+			{
+				displayName:
+					'Calendar and Event use only the CalDAV API credential. ICS Feed API can be left empty.',
+				name: 'calDavCredentialNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: { show: { resource: ['calendar', 'event'] } },
+			},
+			{
+				displayName:
+					'ICS Feed uses only the ICS Feed API credential (Feed URL configuration). CalDAV API can be left empty.',
+				name: 'icsFeedCredentialNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: { show: { resource: ['icsFeed'] } },
+			},
 			...calendarOperations,
 			...calendarFields,
 			...eventOperations,
@@ -387,14 +409,34 @@ export class CalDav implements INodeType {
 			async getCalendars(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				// A stale dropdown request must not access CalDAV credentials for a feed.
 				if (this.getNodeParameter('resource') === 'icsFeed') return [];
-				const creds = await requireResourceCredentials.call(this, 'calDavApi');
+				let creds: IDataObject;
+				try {
+					creds = await requireResourceCredentials.call(this, 'calDavApi');
+				} catch {
+					// A decrypt or lookup failure can name internal state. The dropdown
+					// renders whatever it is handed, so only the actionable part is kept.
+					throw new NodeOperationError(this.getNode(), credentialRequiredMessage('calDavApi'));
+				}
 				const serverUrl = creds.serverUrl as string;
 				const username = creds.username as string;
-				const calendars = await discoverCalendars.call(this, serverUrl, username);
+				let calendars;
+				try {
+					calendars = await discoverCalendars.call(this, serverUrl, username);
+				} catch (error) {
+					// The original error carries the server URL, the username and the
+					// response body; only the classified cause is safe to surface.
+					const diagnostic = calendarDiagnostic(error);
+					const safeError = new NodeOperationError(this.getNode(), new Error(diagnostic.cause), {
+						description: diagnostic.description,
+					});
+					// n8n otherwise replaces connection codes with its generic message.
+					safeError.message = diagnostic.message;
+					throw safeError;
+				}
 				if (!calendars.length) {
 					return [
 						{
-							name: 'No Calendars Found — Check Server URL and Username',
+							name: 'No Calendars Found — Check Server URL, Calendar Permissions and Allow/Block Lists',
 							value: '',
 						},
 					];

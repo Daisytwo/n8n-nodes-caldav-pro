@@ -119,7 +119,7 @@ export class CalDavApi implements ICredentialType {
 				properties: {
 					value: 401,
 					message:
-						'401 Unauthorized: Username or app password wrong. For Infomaniak the username is NOT the email address — see https://config.infomaniak.com/ for the correct short username (e.g. "abc12345").',
+						'401 Unauthorized: credentials were rejected. Check your username and password (or app password). Infomaniak requires the short username, not an email address.',
 				},
 			},
 			{
@@ -135,7 +135,7 @@ export class CalDavApi implements ICredentialType {
 				properties: {
 					value: 403,
 					message:
-						'403 Forbidden: authentication succeeded but access to the principal is denied. Check account permissions.',
+						'403 Forbidden: access was denied. Check the CalDAV credential and account permissions; this response does not prove successful authentication.',
 				},
 			},
 		],

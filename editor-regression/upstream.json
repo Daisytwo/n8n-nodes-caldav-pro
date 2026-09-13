@@ -1,0 +1,34 @@
+[
+  {
+    "version": "2.38.7",
+    "commit": "a2d0f7638bbb7582e33a4dfa1537eeb8ff066788",
+    "files": [
+      {
+        "name": "nodeTypesUtils",
+        "path": "packages/frontend/editor-ui/src/app/utils/nodeTypesUtils.ts",
+        "sha256": "f38487e41a12c58d2752c1c18ea2eaa8c190f5a4194dc8820db60ab8c66065e2"
+      },
+      {
+        "name": "useNodeCredentialOptions",
+        "path": "packages/frontend/editor-ui/src/features/credentials/composables/useNodeCredentialOptions.ts",
+        "sha256": "e6def2fea9cbd99514b74862c53b64e96dd82fd1456ba4b15efedae68ac1bfd0"
+      }
+    ]
+  },
+  {
+    "version": "2.33.7",
+    "commit": "e21f9f128224321cdc85f4239c1a10be3e5532e0",
+    "files": [
+      {
+        "name": "nodeTypesUtils",
+        "path": "packages/frontend/editor-ui/src/app/utils/nodeTypesUtils.ts",
+        "sha256": "03337d319f9f8fd6bade3f2c244f9bc5f4c9503198155f1a38a63296986a0d96"
+      },
+      {
+        "name": "useNodeCredentialOptions",
+        "path": "packages/frontend/editor-ui/src/features/credentials/composables/useNodeCredentialOptions.ts",
+        "sha256": "0733fc25fc3455783ab420e5013dadd4c796caa32f85b4673bd4303641e4a38e"
+      }
+    ]
+  }
+]

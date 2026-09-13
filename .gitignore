@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: a shared install is often linked in as a symlink, which a
+# directory-only pattern would not ignore.
+node_modules
 dist/
 *.log
 .DS_Store

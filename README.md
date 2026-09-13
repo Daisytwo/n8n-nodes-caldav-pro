@@ -20,7 +20,7 @@ This node gives n8n a full CRUD interface to CalDAV calendars. In practical term
 - **Change or cancel a single occurrence** of a recurring series — pass the `recurrenceId` a read returned. Cancelling adds an `EXDATE`; changing writes a `RECURRENCE-ID` override. The rest of the series is untouched.
 - **Address events written by other clients** — Get / Update / Delete / Move accept either the event's URL (as returned by every read operation) or its UID, which is resolved against the server. Events created in Thunderbird, Apple Calendar, or a web UI are stored under a filename the server chose, not under their UID.
 - **Round-trip iCalendar** — events you write come back correctly parsed, including RRULE, TZID, and alarms.
-- **Use it as an AI Agent tool** — every field has an LLM-readable description with examples, so an agent can call it cold and get it right on the first try.
+- **Use it as an AI Agent tool** — every field has an LLM-readable description with examples. Connect one tool node per action with Resource and Operation fixed; the agent fills the value parameters. See [AI Agent Usage](#ai-agent-usage).
 
 ### Typical use cases
 
@@ -191,38 +191,59 @@ available.
 
 ## AI Agent Usage
 
-The node is declared `usableAsTool: true` with LLM-friendly descriptions on every parameter. An AI Agent can call it directly from a chat prompt. Example:
+The node is declared `usableAsTool: true`. Connect a **separate tool node for each
+action** you want the agent to use, for example `Find events` (Event → Search),
+`Create event` (Event → Create), and `Read feed` (ICS Feed → Get Many).
+**Resource and Operation must remain fixed** in each tool: these routing fields
+have `noDataExpression: true`. Do not put `$fromAI()` or other expressions in them.
+The agent chooses among the connected tools, not a dynamic resource/operation.
 
-> *"Create a calendar event in my primary calendar for tomorrow at 14:00 Berlin
-> time. Title: 'Kickoff with customer'. Duration: 1 hour. Location: 'Zoom — link
-> in the invite'. Invite alice@example.com and bob@example.com. Remind me 1 day
-> and 15 minutes before."*
+Configure each tool in the editor:
 
-The agent will populate:
+1. Select its fixed Resource and Operation and give it a clear name/description.
+2. For Calendar/Event select **CalDAV API**; **ICS Feed API** can be empty.
+   For ICS Feed select **ICS Feed API**; **CalDAV API** can be empty.
+3. For Event, select a specific Calendar, or choose **Default Calendar** and
+   configure the credential's **Default Calendar** hint. This is not the first
+   dropdown entry or the first discovered calendar. `getCalendars` loads editor
+   options; it is not a tool the agent can call. If needed, expose a separate
+   Calendar → Get Many tool for calendar discovery.
+4. Use the editor's **Let the model define this parameter** option or `$fromAI()`
+   only on supported, expression-capable **value parameters** of the selected
+   action. Keep credentials, URLs and routing under your control. Do not assume
+   an entire collection (attendees, reminders, or additional fields) can be
+   AI-filled: configure its structure in the editor and use supported leaf fields.
 
-- `resource` = `event`, `operation` = `create`
-- `calendar` = picked from the dropdown via `getCalendars`
-- `summary` = `"Kickoff with customer"`
-- `start` = `"2026-04-22T14:00:00+02:00"`, `end` = `"2026-04-22T15:00:00+02:00"`
-- `additionalFields.timezone` = `"Europe/Berlin"`
-- `additionalFields.location` = `"Zoom — link in the invite"`
-- `additionalFields.attendees` = two attendee objects
-- `additionalFields.reminders` = `[{minutesBefore: 1440}, {minutesBefore: 15}]`
+For a fixed **Event → Create** tool, example value expressions are:
+
+```javascript
+// Summary
+{{ $fromAI('summary', 'Event title confirmed by the user', 'string') }}
+// Start
+{{ $fromAI('start', 'Confirmed start as ISO 8601 with timezone offset', 'string') }}
+// End
+{{ $fromAI('end', 'Confirmed end as ISO 8601 with timezone offset, after start', 'string') }}
+```
+
+Set Calendar and, for example, Additional Fields → Timezone = `Europe/Berlin`
+yourself. Configure optional attendee/reminder fields explicitly if needed.
+For Search or Get Many supply a valid Time Min/Time Max window; do not replace
+missing or invalid dates with silent defaults. For Update, leave both Start and
+End unset when changing only the title; supply both when moving the appointment.
 
 ### Recommended system prompt
 
 ```
-You are a calendar assistant with access to a CalDAV tool.
+You are a calendar assistant with separate tools for specific calendar actions.
 
-- Convert any time/date mentioned by the user to ISO 8601 with
-  the Europe/Berlin timezone offset before calling the tool.
+- Choose the tool whose fixed action matches the request.
+- Convert confirmed dates to ISO 8601 with the correct Europe/Berlin offset.
   Current time: {{ $now.toISO() }}.
-- Always include "timezone": "Europe/Berlin" in additionalFields.
-- Before creating: confirm title, start, end in one short sentence.
-- Before deleting: always confirm with the event UID.
-- If the user is vague ("irgendwann"), ask one clarifying question.
-- Use the default calendar (first one returned by getCalendars)
-  unless the user names a specific one.
+- Use startLocal/endLocal from read results when displaying event times.
+- Before creating: confirm title, start and end in one short sentence.
+- Before deleting: confirm the event and whether one occurrence or the series.
+- If the date or intended calendar is unclear, ask rather than guess.
+- Use the calendar configured in the tool. Do not invent calendar URLs.
 ```
 
 ## Tested with

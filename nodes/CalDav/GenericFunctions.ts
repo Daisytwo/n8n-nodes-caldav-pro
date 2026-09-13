@@ -1,3 +1,4 @@
+import { calendarDiagnostic } from './CalendarDiagnostics';
 import type {
 	IExecuteFunctions,
 	IHttpRequestMethods,
@@ -244,7 +245,7 @@ export async function discoverCalendarHome(
 				if (href) return absoluteUrl(href, serverUrl, SERVER_HREF);
 			}
 		} catch (e) {
-			logger?.debug(`[CalDAV] principal probe ${url} failed: ${(e as Error).message}`);
+			logger?.debug(`[CalDAV] principal probe failed: ${calendarDiagnostic(e).cause}`);
 		}
 		return null;
 	};
@@ -260,7 +261,7 @@ export async function discoverCalendarHome(
 				}
 			}
 		} catch (e) {
-			logger?.debug(`[CalDAV] home probe ${url} failed: ${(e as Error).message}`);
+			logger?.debug(`[CalDAV] home probe failed: ${calendarDiagnostic(e).cause}`);
 		}
 		return null;
 	};
@@ -273,35 +274,35 @@ export async function discoverCalendarHome(
 	// Step 2: PROPFIND on server root — SabreDAV-based servers (Infomaniak) expose
 	// current-user-principal here. This is the most portable discovery path.
 	if (!principalUrl) {
-		logger?.debug(`[CalDAV] discover step 2: PROPFIND ${base}/`);
+		logger?.debug('[CalDAV] discover step 2: PROPFIND server root');
 		principalUrl = await tryPrincipal(`${base}/`);
 	}
 
 	// Step 3: principal -> calendar-home-set
 	if (principalUrl) {
-		logger?.debug(`[CalDAV] discover step 3: home-set from ${principalUrl}`);
+		logger?.debug('[CalDAV] discover step 3: principal home-set');
 		const home = await tryHome(principalUrl);
 		if (home) {
-			logger?.debug(`[CalDAV] calendar-home-set = ${home}`);
+			logger?.debug('[CalDAV] calendar-home-set found');
 			return home;
 		}
 	}
 
 	// Step 4: conventional principals path, without "/users/" segment
 	const altPrincipal = `${base}/principals/${encodeURIComponent(username)}/`;
-	logger?.debug(`[CalDAV] discover step 4: fallback ${altPrincipal}`);
+	logger?.debug('[CalDAV] discover step 4: fallback principal');
 	const altHome = await tryHome(altPrincipal);
 	if (altHome) return altHome;
 
 	// Step 5: legacy /principals/users/ (CalendarServer/DAViCal convention)
 	const legacyPrincipal = `${base}/principals/users/${encodeURIComponent(username)}/`;
-	logger?.debug(`[CalDAV] discover step 5: legacy ${legacyPrincipal}`);
+	logger?.debug('[CalDAV] discover step 5: legacy principal');
 	const legacyHome = await tryHome(legacyPrincipal);
 	if (legacyHome) return legacyHome;
 
 	// Step 6: last-resort conventional calendars path
 	const fallback = `${base}/calendars/${encodeURIComponent(username)}/`;
-	logger?.debug(`[CalDAV] discover step 6: last-resort ${fallback}`);
+	logger?.debug('[CalDAV] discover step 6: last-resort home');
 	return fallback;
 }
 
@@ -502,11 +503,11 @@ async function discoverCalendarsUncached(
 		matchers.some((m) => m(c.displayName) || m(c.url));
 	const filtered = calendars.filter((c) => {
 		if (allow.length && !matchesAny(allow, c)) {
-			logger?.debug(`[CalDAV] filter: "${c.displayName}" hidden by allow-list`);
+			logger?.debug('[CalDAV] calendar hidden by allow-list');
 			return false;
 		}
 		if (block.length && matchesAny(block, c)) {
-			logger?.debug(`[CalDAV] filter: "${c.displayName}" (${c.url}) hidden by block-list`);
+			logger?.debug('[CalDAV] calendar hidden by block-list');
 			return false;
 		}
 		return true;

@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.5.2]
+
+### Security
+
+- A failed Calendar dropdown load no longer echoes the original error into the
+  editor. Only an allow-listed HTTP status or connection code is surfaced, so the
+  credential's Server URL (a per-user token path for some providers), the
+  username, and the server's response body stay hidden.
+- Discovery and calendar-filter debug logging no longer writes probe URLs,
+  principal and home-set URLs, or calendar display names to the n8n log.
+
+### Changed
+
+- Each resource now shows a notice naming the credential it actually reads, so
+  Calendar/Event and External ICS Feed stay clear without gating the credentials
+  themselves — gating is what n8n mistakes for an authentication switch (#4).
+- The credential test messages no longer claim that a 403 proves authentication
+  succeeded, and the 401 message explains the Infomaniak short username without
+  linking to a provider console.
+- An empty Calendar dropdown now points at calendar permissions and the
+  allow/block lists as well as the Server URL and username.
+
+### Documentation
+
+- Rewrote **AI Agent Usage**: one tool node per action with Resource and
+  Operation fixed (both are `noDataExpression`), `$fromAI()` only on supported
+  value parameters, and explicit calendar selection instead of an implied
+  "first calendar from `getCalendars`". The previous section described an agent
+  choosing resource, operation, and calendar by itself, which the node does not
+  support.
+
 ## [3.5.1]
 
 ### Fixed
